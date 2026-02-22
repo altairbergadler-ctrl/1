@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WP Store App</string>
+    <string name="nav_home">Главная</string>
+    <string name="nav_catalog">Каталог</string>
+    <string name="nav_chat">Чат</string>
+
+    <string name="vpn_turn_on">Включить VPN VLESS</string>
+    <string name="vpn_turn_off">Выключить VPN VLESS</string>
+    <string name="vpn_enabled">VPN VLESS включен</string>
+    <string name="vpn_disabled">VPN VLESS выключен</string>
+
+    <string name="catalog_url">https://example.com/catalog</string>
+
+    <string name="chat_token_hint">Введите токен для регистрации</string>
+    <string name="chat_register">Зарегистрироваться в чате</string>
+    <string name="chat_name_hint">Имя пользователя</string>
+    <string name="chat_about_hint">Информация о себе</string>
+    <string name="chat_available_list">Доступные чаты</string>
+    <string name="chat_token_required">Введите токен</string>
+    <string name="chat_registered">Успешная регистрация в чате</string>
+</resources>
