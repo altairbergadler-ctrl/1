@@ -21,13 +21,23 @@ services:
       timeout: 3s
       retries: 10
 
+  migrate:
+    build: ./backend
+    env_file: .env
+    command: alembic upgrade head
+    volumes:
+      - ./backend:/code
+    depends_on:
+      db:
+        condition: service_healthy
+
   backend:
     build: ./backend
     env_file: .env
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/code
-      - ./data/music:/music
+      - ./data/music:/music/library:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -35,6 +45,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build: ./backend
@@ -42,12 +54,14 @@ services:
     command: celery -A app.workers.celery_app.celery worker --loglevel=INFO
     volumes:
       - ./backend:/code
-      - ./data/music:/music
+      - ./data/music:/music/library:ro
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
