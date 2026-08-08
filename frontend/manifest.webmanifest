@@ -1,0 +1,20 @@
+{
+  "name": "Lossless Archive",
+  "short_name": "Lossless",
+  "description": "Bit-perfect доступ к локальной lossless-библиотеке и плейлистам.",
+  "lang": "ru",
+  "start_url": "/#/playlists",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d1115",
+  "theme_color": "#14191f",
+  "categories": ["music", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

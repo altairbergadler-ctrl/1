@@ -222,4 +222,15 @@ class Job(Base):
                 "type = 'import_playlists' AND status IN ('pending', 'running')"
             ),
         ),
+        Index(
+            "uq_jobs_active_matching",
+            "type",
+            unique=True,
+            postgresql_where=text(
+                "type = 'run_matching' AND status IN ('pending', 'running')"
+            ),
+            sqlite_where=text(
+                "type = 'run_matching' AND status IN ('pending', 'running')"
+            ),
+        ),
     )

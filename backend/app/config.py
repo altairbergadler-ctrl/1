@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     music_library_path: str
     app_auth_token: str = Field(min_length=16)
     timezone: str = Field(default="UTC", validation_alias="TZ")
+    auth_cookie_max_age_seconds: int = Field(default=30 * 24 * 60 * 60, ge=300)
+    auth_cookie_secure: bool = False
 
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
@@ -33,6 +35,7 @@ class Settings(BaseSettings):
     celery_visibility_timeout_seconds: int = Field(default=24 * 60 * 60, ge=3600)
     scan_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
     playlist_import_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
+    matching_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
 
 settings = Settings()

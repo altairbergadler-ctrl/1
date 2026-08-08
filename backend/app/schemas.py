@@ -13,6 +13,10 @@ class LoginIn(BaseModel):
     token: str
 
 
+class LoginOut(BaseModel):
+    authenticated: bool = True
+
+
 class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -153,3 +157,52 @@ class PlaylistItemOut(BaseModel):
 class PlaylistItemsOut(BaseModel):
     items: list[PlaylistItemOut]
     total: int
+
+
+class MatchingRunIn(BaseModel):
+    playlist_id: int | None = Field(default=None, gt=0)
+
+
+class ReviewCandidateOut(BaseModel):
+    track_id: int
+    artist: str
+    title: str
+    album: str
+    duration_ms: int | None = None
+    isrc: str | None = None
+    confidence: float
+    bit_depth: int | None = None
+    sample_rate: int | None = None
+    format: str | None = None
+
+
+class ReviewItemOut(BaseModel):
+    match_id: int
+    playlist_id: int
+    playlist_name: str
+    playlist_item_id: int
+    position: int
+    artist_raw: str | None = None
+    title_raw: str | None = None
+    album_raw: str | None = None
+    duration_ms: int | None = None
+    confidence: float
+    candidates: list[ReviewCandidateOut]
+
+
+class ReviewListOut(BaseModel):
+    items: list[ReviewItemOut]
+    total: int
+
+
+class MatchResolveIn(BaseModel):
+    track_id: int | None = Field(default=None, gt=0)
+
+
+class MatchResolveOut(BaseModel):
+    match_id: int
+    playlist_item_id: int
+    track_id: int | None = None
+    confidence: float
+    method: str
+    status: PlaylistItemStatus

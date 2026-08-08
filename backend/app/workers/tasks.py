@@ -14,6 +14,7 @@ from app.models import (
     utcnow,
 )
 from app.services.musicbrainz import MusicBrainzClient, enrich_albums
+from app.services.matcher import run_matching
 from app.services.scanner import ScanAlreadyRunning, scan_library
 from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
 from app.services.yandex import import_yandex_playlists, refresh_yandex_playlist
@@ -589,7 +590,119 @@ def import_playlists_task(
         db.close()
 
 
-@celery.task(name="run_matching")
-def run_matching_task(playlist_id: int | None = None):
-    """TODO (Этап 4): вызвать services.matcher.run()."""
-    return {"status": "not_implemented", "playlist_id": playlist_id}
+@celery.task(
+    bind=True,
+    name="run_matching",
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def run_matching_task(
+    self,
+    job_id: int,
+    playlist_id: int | None = None,
+):
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-matching-{job_id}")[:64]
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "run_matching",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        summary = run_matching(db, playlist_id=playlist_id)
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "playlist_id": playlist_id,
+                "matching": summary.to_dict(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        finished_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == JobStatus.running,
+                Job.lock_owner == task_id,
+            )
+            .values(
+                status=JobStatus.done,
+                payload=final_payload,
+                error=None,
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if finished_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return json.loads(final_payload)
+    except Exception as exc:
+        db.rollback()
+        retrying = self.request.retries < self.max_retries
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "run_matching",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=(
+                    f"Matching attempt {self.request.retries + 1} failed "
+                    f"({type(exc).__name__}); retry scheduled"
+                    if retrying
+                    else f"Matching failed ({type(exc).__name__})"
+                ),
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(60, 2**self.request.retries),
+            )
+        raise
+    finally:
+        db.close()

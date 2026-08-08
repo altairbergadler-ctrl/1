@@ -1,11 +1,114 @@
-from fastapi import APIRouter, Depends
+from typing import Literal
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.auth import require_auth
+from app.db import get_db
+from app.services.delivery import (
+    DeliveryFileUnavailable,
+    DeliveryNotReady,
+    DeliveryResourceNotFound,
+    album_entries,
+    build_m3u8,
+    build_stored_zip,
+    playlist_entries,
+    playlist_item_entry,
+    safe_filename,
+)
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
 
 @router.get("/track/{item_id}")
-def download_track(item_id: int):
-    """TODO (Этап 4): отдать файл bit-perfect с поддержкой Range."""
-    return {"todo": f"Этап 4: отдача файла для playlist_item {item_id}"}
+def download_track(item_id: int, db: Session = Depends(get_db)):
+    try:
+        entry = playlist_item_entry(db, item_id)
+    except DeliveryResourceNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DeliveryNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DeliveryFileUnavailable as exc:
+        raise HTTPException(status_code=409, detail="Matched file is unavailable") from exc
+    return FileResponse(
+        entry.path,
+        filename=entry.filename,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/album/{album_id}")
+def download_album(album_id: int, db: Session = Depends(get_db)):
+    try:
+        album, entries = album_entries(db, album_id)
+    except DeliveryResourceNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DeliveryNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DeliveryFileUnavailable as exc:
+        raise HTTPException(status_code=409, detail="Matched file is unavailable") from exc
+    filename = safe_filename(
+        f"{album.artist.name} - {album.title}.zip",
+        fallback=f"album-{album.id}.zip",
+    )
+    return StreamingResponse(
+        build_stored_zip(entries),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@router.get("/playlist/{playlist_id}")
+def download_playlist(
+    playlist_id: int,
+    mode: Literal["matched"] = "matched",
+    db: Session = Depends(get_db),
+):
+    del mode
+    try:
+        playlist, entries = playlist_entries(db, playlist_id)
+    except DeliveryResourceNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DeliveryNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DeliveryFileUnavailable as exc:
+        raise HTTPException(status_code=409, detail="Matched file is unavailable") from exc
+    filename = safe_filename(
+        f"{playlist.name}.zip",
+        fallback=f"playlist-{playlist.id}.zip",
+    )
+    manifest = build_m3u8(entries)
+    return StreamingResponse(
+        build_stored_zip(entries, m3u8=manifest),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
+
+
+@router.get("/playlist/{playlist_id}/m3u8")
+def download_playlist_m3u8(playlist_id: int, db: Session = Depends(get_db)):
+    try:
+        playlist, entries = playlist_entries(db, playlist_id)
+    except DeliveryResourceNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DeliveryNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DeliveryFileUnavailable as exc:
+        raise HTTPException(status_code=409, detail="Matched file is unavailable") from exc
+    filename = safe_filename(
+        f"{playlist.name}.m3u8",
+        fallback=f"playlist-{playlist.id}.m3u8",
+    )
+    return PlainTextResponse(
+        build_m3u8(entries),
+        media_type="audio/x-mpegurl; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
+    )
