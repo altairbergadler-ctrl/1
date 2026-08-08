@@ -176,6 +176,31 @@ def test_import_is_idempotent_and_maps_tracks_in_batches(
     )
 
 
+def test_summary_with_empty_track_placeholder_loads_playlist_details(
+    db, yandex_source
+):
+    summary = playlist(9, title="Summary", tracks=[])
+    summary.track_count = 2
+    refs = [track_ref("1"), track_ref("2")]
+    remote = playlist(9, title="Complete", tracks=refs)
+    client = FakeYandexClient(
+        [summary],
+        {("42", 9): remote},
+        {
+            "1:album-1": full_track("1", title="First"),
+            "2:album-1": full_track("2", title="Second"),
+        },
+    )
+
+    result = import_yandex_playlists(db, yandex_source, client=client)
+
+    assert result.imported == 1
+    assert result.failed == 0
+    assert client.detail_calls == [(9, "42")]
+    assert db.scalar(select(Playlist.track_count)) == 2
+    assert db.scalar(select(func.count()).select_from(PlaylistItem)) == 2
+
+
 def test_changed_snapshot_replaces_items_and_updates_playlist(db, yandex_source):
     original = playlist(
         8,

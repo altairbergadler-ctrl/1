@@ -282,9 +282,19 @@ def _track_matching_signature(track: YandexTrackData) -> tuple[Any, ...]:
 
 
 def _load_full_playlist(client: YandexClient, summary: Any) -> Any:
-    # The list response can already contain tracks (notably empty playlists).
-    if _get(summary, "tracks") is not None:
-        return summary
+    # The list response can already contain complete tracks (notably for an
+    # empty playlist). Current Yandex responses also use ``tracks=[]`` as a
+    # placeholder while reporting a non-zero ``track_count``; those summaries
+    # still require the detail request.
+    tracks = _get(summary, "tracks")
+    track_count = _get(summary, "track_count", "trackCount")
+    if tracks is not None:
+        try:
+            tracks_are_complete = track_count is None or len(tracks) >= int(track_count)
+        except (TypeError, ValueError):
+            tracks_are_complete = False
+        if tracks_are_complete:
+            return summary
 
     owner_id, kind = _playlist_identity(summary)
     full = client.users_playlists(kind, user_id=owner_id)
