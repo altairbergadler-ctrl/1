@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from importlib.metadata import version
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -241,6 +242,12 @@ def test_create_oauth_requires_all_credentials():
 
     with pytest.raises(SpotifyConfigurationError):
         create_spotify_oauth(config)
+
+
+def test_spotipy_uses_current_playlist_items_endpoint():
+    major, minor, *_ = (int(part) for part in version("spotipy").split("."))
+
+    assert (major, minor) >= (2, 26)
 
 
 def test_refresh_preserves_rotating_token_when_spotify_omits_it():
