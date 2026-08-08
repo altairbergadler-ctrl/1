@@ -1,18 +1,84 @@
 import json
 from time import monotonic
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select, text, update
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Job, JobStatus, utcnow
+from app.models import (
+    Job,
+    JobStatus,
+    Playlist,
+    PlaylistSource,
+    ServiceEnum,
+    utcnow,
+)
 from app.services.musicbrainz import MusicBrainzClient, enrich_albums
 from app.services.scanner import ScanAlreadyRunning, scan_library
+from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
+from app.services.yandex import import_yandex_playlists, refresh_yandex_playlist
 from app.workers.celery_app import celery
 
 
 class JobLeaseLost(RuntimeError):
-    """The scan task was superseded and must stop without changing its job."""
+    """The task was superseded and must stop without changing its job."""
+
+
+_IMPORT_EXECUTION_LOCK_NAMESPACE = 20260809
+
+
+def _acquire_import_source_lock(db, source_id: int):
+    """Serialize provider writes for one source across PostgreSQL workers.
+
+    A dedicated connection owns the session-level advisory lock because provider
+    importers intentionally commit per playlist. Transaction-level locks on the
+    ORM session would be released by those commits.
+    """
+
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+
+    connection = bind.connect()
+    try:
+        connection.execute(
+            text("SELECT pg_advisory_lock(:namespace, :source_id)"),
+            {
+                "namespace": _IMPORT_EXECUTION_LOCK_NAMESPACE,
+                "source_id": source_id,
+            },
+        )
+        # Session-level advisory locks survive COMMIT; end the SELECT's
+        # transaction so external provider calls do not leave it idle/open.
+        connection.commit()
+    except Exception:
+        connection.close()
+        raise
+    return connection
+
+
+def _release_import_source_lock(connection, source_id: int) -> None:
+    if connection is None:
+        return
+    try:
+        connection.execute(
+            text("SELECT pg_advisory_unlock(:namespace, :source_id)"),
+            {
+                "namespace": _IMPORT_EXECUTION_LOCK_NAMESPACE,
+                "source_id": source_id,
+            },
+        )
+        connection.commit()
+    except Exception:
+        # Never return a PostgreSQL session that might still own the lock to the
+        # pool. Invalidating closes the backend connection and releases its lock.
+        connection.invalidate()
+    finally:
+        connection.close()
+
+
+class PlaylistImportAllFailed(RuntimeError):
+    """Every remote playlist failed, so Celery should retry the provider call."""
 
 
 def _claim_job_lease(db, job_id: int, task_id: str) -> None:
@@ -348,10 +414,179 @@ def scan_library_task(self, job_id: int):
         db.close()
 
 
-@celery.task(name="import_playlists")
-def import_playlists_task(source_id: int):
-    """TODO (Этап 3): вызвать services.spotify / services.yandex."""
-    return {"status": "not_implemented", "source_id": source_id}
+def _import_summary_dict(summary) -> dict:
+    if hasattr(summary, "to_dict"):
+        return summary.to_dict()
+    if hasattr(summary, "as_dict"):
+        return summary.as_dict()
+    if isinstance(summary, dict):
+        return summary
+    raise TypeError("Playlist importer returned an unsupported summary")
+
+
+@celery.task(
+    bind=True,
+    name="import_playlists",
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def import_playlists_task(
+    self,
+    job_id: int,
+    source_id: int,
+    playlist_id: int | None = None,
+):
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-import-{job_id}")[:64]
+    source_lock = None
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "import_playlists",
+                Job.source_id == source_id,
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        source_lock = _acquire_import_source_lock(db, source_id)
+        # A replacement API request may revoke this job while it waits for an
+        # older worker's source lock. Revalidate before any provider writes.
+        _renew_job_lease(db, job_id, task_id)
+
+        source = db.get(PlaylistSource, source_id)
+        if source is None:
+            raise ValueError(f"Playlist source {source_id} does not exist")
+        playlist = None
+        if playlist_id is not None:
+            playlist = db.get(Playlist, playlist_id)
+            if playlist is None or playlist.source_id != source.id:
+                raise ValueError("Playlist does not belong to the import source")
+
+        if source.service == ServiceEnum.spotify:
+            summary = (
+                refresh_spotify_playlist(db, playlist)
+                if playlist is not None
+                else import_spotify_playlists(db, source)
+            )
+        elif source.service == ServiceEnum.yandex:
+            summary = (
+                refresh_yandex_playlist(db, playlist)
+                if playlist is not None
+                else import_yandex_playlists(db, source)
+            )
+        else:
+            raise ValueError(f"Unsupported playlist source: {source.service}")
+
+        summary_data = _import_summary_dict(summary)
+        result_status = "completed"
+        if summary_data.get("failed"):
+            successful = sum(
+                int(summary_data.get(key, 0) or 0)
+                for key in ("imported", "created", "updated", "skipped", "unchanged")
+            )
+            result_status = "partial" if successful else "failed"
+        if result_status == "failed":
+            raise PlaylistImportAllFailed("All provider playlists failed")
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "source_id": source.id,
+                "playlist_id": playlist_id,
+                "service": source.service.value,
+                "result_status": result_status,
+                "import": summary_data,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        finished_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.source_id == source_id,
+                Job.status == JobStatus.running,
+                Job.lock_owner == task_id,
+            )
+            .values(
+                status=JobStatus.done,
+                payload=final_payload,
+                error=None,
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if finished_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return json.loads(final_payload)
+    except Exception as exc:
+        db.rollback()
+        retrying = self.request.retries < self.max_retries
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "import_playlists",
+                Job.source_id == source_id,
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=(
+                    f"Import attempt {self.request.retries + 1} failed "
+                    f"({type(exc).__name__}); retry scheduled"
+                    if retrying
+                    else f"Playlist import failed ({type(exc).__name__})"
+                ),
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(120, 2**self.request.retries),
+            )
+        raise
+    finally:
+        _release_import_source_lock(source_lock, source_id)
+        db.close()
 
 
 @celery.task(name="run_matching")

@@ -8,10 +8,12 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -61,7 +63,10 @@ class PlaylistSource(Base):
     access_token = Column(Text)
     refresh_token = Column(Text)
     expires_at = Column(DateTime)
-    playlists = relationship("Playlist", back_populates="source")
+    playlists = relationship(
+        "Playlist", back_populates="source", cascade="all, delete-orphan"
+    )
+    __table_args__ = (UniqueConstraint("service", name="uq_playlist_sources_service"),)
 
 
 class Playlist(Base):
@@ -95,7 +100,18 @@ class PlaylistItem(Base):
     duration_ms = Column(Integer)
     external_track_id = Column(String(256))
     playlist = relationship("Playlist", back_populates="items")
-    match = relationship("Match", back_populates="playlist_item", uselist=False)
+    match = relationship(
+        "Match",
+        back_populates="playlist_item",
+        uselist=False,
+        cascade="all, delete-orphan",
+        single_parent=True,
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "playlist_id", "position", name="uq_playlist_items_playlist_position"
+        ),
+    )
 
 
 class Artist(Base):
@@ -181,6 +197,9 @@ class Job(Base):
     __tablename__ = "jobs"
     id = Column(Integer, primary_key=True)
     type = Column(String(64), nullable=False)
+    source_id = Column(
+        ForeignKey("playlist_sources.id", ondelete="SET NULL"), nullable=True
+    )
     status = Column(
         Enum(JobStatus, values_callable=enum_values, name="job_status"),
         default=JobStatus.pending,
@@ -191,3 +210,16 @@ class Job(Base):
     heartbeat_at = Column(DateTime, default=utcnow, nullable=False)
     lock_owner = Column(String(64))
     finished_at = Column(DateTime)
+    __table_args__ = (
+        Index(
+            "uq_jobs_active_import_source",
+            "source_id",
+            unique=True,
+            postgresql_where=text(
+                "type = 'import_playlists' AND status IN ('pending', 'running')"
+            ),
+            sqlite_where=text(
+                "type = 'import_playlists' AND status IN ('pending', 'running')"
+            ),
+        ),
+    )

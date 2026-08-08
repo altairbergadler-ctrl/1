@@ -1,7 +1,8 @@
 import json
 from datetime import datetime
+from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class HealthOut(BaseModel):
@@ -77,3 +78,78 @@ class PlaylistOut(BaseModel):
     id: int
     name: str
     track_count: int
+
+
+class SourceOut(BaseModel):
+    id: int
+    service: str
+    connected: bool
+    expires_at: datetime | None = None
+
+
+class SourceListOut(BaseModel):
+    items: list[SourceOut]
+
+
+class PlaylistImportIn(BaseModel):
+    source_id: int = Field(gt=0)
+
+
+class PlaylistStatusSummaryOut(BaseModel):
+    ready: int
+    missing: int
+    review: int
+    unmatched: int
+    collected_percent: float
+
+
+class PlaylistListItemOut(BaseModel):
+    id: int
+    source_id: int
+    service: str
+    external_id: str
+    name: str
+    snapshot_hash: str | None = None
+    track_count: int
+    updated_at: datetime
+    summary: PlaylistStatusSummaryOut
+
+
+class PlaylistListOut(BaseModel):
+    items: list[PlaylistListItemOut]
+    total: int
+
+
+class PlaylistDetailOut(PlaylistListItemOut):
+    pass
+
+
+class PlaylistItemStatus(str, Enum):
+    unmatched = "UNMATCHED"
+    ready = "READY"
+    needs_review = "NEEDS_REVIEW"
+    missing = "MISSING"
+
+
+class PlaylistItemOut(BaseModel):
+    id: int
+    position: int
+    artist_raw: str | None = None
+    title_raw: str | None = None
+    album_raw: str | None = None
+    artist_norm: str | None = None
+    title_norm: str | None = None
+    album_norm: str | None = None
+    isrc: str | None = None
+    duration_ms: int | None = None
+    external_track_id: str | None = None
+    status: PlaylistItemStatus
+    match_id: int | None = None
+    track_id: int | None = None
+    confidence: float | None = None
+    method: str | None = None
+
+
+class PlaylistItemsOut(BaseModel):
+    items: list[PlaylistItemOut]
+    total: int

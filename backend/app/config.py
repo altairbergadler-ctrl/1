@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
     spotify_redirect_uri: str = ""
+    spotify_oauth_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=3600)
 
     yandex_token: str = ""
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     celery_task_always_eager: bool = False
     celery_visibility_timeout_seconds: int = Field(default=24 * 60 * 60, ge=3600)
     scan_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
+    playlist_import_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
 
 
 settings = Settings()

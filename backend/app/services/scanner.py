@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Album, Artist, File as LibraryFile, Match, Track, utcnow
+from app.services.normalize import (
+    normalize_album,
+    normalize_artist,
+    normalize_text,
+    normalize_title,
+)
 
 SUPPORTED_EXTENSIONS = frozenset({".flac", ".alac", ".wav", ".dsf", ".dff", ".ape"})
 _ALBUM_RE = re.compile(
@@ -101,8 +107,9 @@ class ScanSummary:
 
 
 def normalize_catalog_key(value: str) -> str:
-    value = unicodedata.normalize("NFKC", value).casefold()
-    return _SPACE_RE.sub(" ", value).strip()
+    """Backward-compatible generic entry point for catalog comparisons."""
+
+    return normalize_text(value)
 
 
 def clean_tag_text(value: Any, *, limit: int = 512) -> str:
@@ -427,7 +434,7 @@ def read_audio_metadata(
 
 
 def _get_or_create_artist(db: Session, metadata: AudioMetadata) -> Artist:
-    name_norm = normalize_catalog_key(metadata.artist)
+    name_norm = normalize_artist(metadata.artist)
     artist = db.scalar(select(Artist).where(Artist.name_norm == name_norm))
     if artist is None:
         artist = Artist(
@@ -443,7 +450,7 @@ def _get_or_create_artist(db: Session, metadata: AudioMetadata) -> Artist:
 
 
 def _get_or_create_album(db: Session, artist: Artist, metadata: AudioMetadata) -> Album:
-    title_norm = normalize_catalog_key(metadata.album)
+    title_norm = normalize_album(metadata.album)
     statement = select(Album).where(
         Album.artist_id == artist.id,
         Album.title_norm == title_norm,
@@ -474,7 +481,7 @@ def _nullable_equals(column: Any, value: int | None) -> Any:
 
 
 def _get_or_create_track(db: Session, album: Album, metadata: AudioMetadata) -> Track:
-    title_norm = normalize_catalog_key(metadata.title)
+    title_norm = normalize_title(metadata.title)
     track = db.scalar(
         select(Track).where(
             Track.album_id == album.id,
@@ -510,6 +517,21 @@ def _apply_replacement_metadata(track: Track, metadata: AudioMetadata) -> None:
     track.duration_ms = metadata.duration_ms
     track.isrc = metadata.isrc
     track.mbid = metadata.track_mbid
+
+
+def _carry_catalog_enrichment(old_track: Track, new_track: Track) -> None:
+    """Preserve enrichment when normalization relinks the same audio content."""
+
+    old_album = old_track.album
+    new_album = new_track.album
+    if new_album.artist.mbid is None:
+        new_album.artist.mbid = old_album.artist.mbid
+    if new_album.mbid is None:
+        new_album.mbid = old_album.mbid
+    if new_track.isrc is None:
+        new_track.isrc = old_track.isrc
+    if new_track.mbid is None:
+        new_track.mbid = old_track.mbid
 
 
 def _prune_orphaned_track(db: Session, track_id: int | None) -> None:
@@ -587,9 +609,21 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
         same_hash.format = metadata.format
         same_hash.bit_depth = metadata.bit_depth
         same_hash.sample_rate = metadata.sample_rate
-        album_id = same_hash.track.album_id
         if same_hash.path == metadata.path:
-            return "unchanged", album_id
+            old_track = same_hash.track
+            old_track_id = same_hash.track_id
+            artist = _get_or_create_artist(db, metadata)
+            album = _get_or_create_album(db, artist, metadata)
+            track = _get_or_create_track(db, album, metadata)
+            if old_track_id != track.id:
+                _carry_catalog_enrichment(old_track, track)
+                same_hash.track = track
+                db.flush()
+                _prune_orphaned_track(db, old_track_id)
+                return "updated", album.id
+            return "unchanged", album.id
+
+        album_id = same_hash.track.album_id
 
         if same_path is not None and same_path.id != same_hash.id:
             stale_track_id = same_path.track_id
@@ -597,10 +631,13 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
             db.flush()
             _prune_orphaned_track(db, stale_track_id)
         if not Path(same_hash.path).exists():
+            old_track = same_hash.track
             old_track_id = same_hash.track_id
             artist = _get_or_create_artist(db, metadata)
             album = _get_or_create_album(db, artist, metadata)
             track = _get_or_create_track(db, album, metadata)
+            if old_track_id != track.id:
+                _carry_catalog_enrichment(old_track, track)
             same_hash.track = track
             same_hash.path = metadata.path
             db.flush()

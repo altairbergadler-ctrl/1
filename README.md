@@ -1,4 +1,4 @@
-# Music Service — MVP (Этап 2: библиотека)
+# Music Service — MVP (Этап 3: импорт плейлистов)
 
 Hi-Res музыкальный архив: импорт плейлистов Spotify/Яндекс.Музыки,
 матчинг с локальной lossless-библиотекой, bit-perfect выдача на смартфон.
@@ -37,6 +37,33 @@ docker compose up --build
 теги Mutagen и использует fallback
 `Artist/Album (Year)/NN - Title.ext`. Дедупликация файлов выполняется по SHA-1.
 
+## Источники и плейлисты
+
+- `GET /api/sources/spotify/connect` — начало Spotify Authorization Code OAuth;
+- `GET /api/sources/spotify/callback` — callback с одноразовым Redis state;
+- `POST /api/sources/yandex/connect` — проверка и сохранение `YANDEX_TOKEN`;
+- `GET /api/sources` — подключённые источники без выдачи токенов;
+- `POST /api/playlists/import` — фоновый импорт по `source_id`;
+- `GET /api/playlists` — список и сводка READY/MISSING/REVIEW/UNMATCHED;
+- `GET /api/playlists/{id}` и `/items?status=` — детали и треки;
+- `POST /api/playlists/{id}/refresh` — инкрементальное обновление.
+
+Spotify требует `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и точного
+`SPOTIFY_REDIRECT_URI`, зарегистрированного в приложении Spotify. Для
+Яндекс.Музыки используется `YANDEX_TOKEN` из `.env`. Токены провайдеров никогда
+не возвращаются API.
+
+Spotify пропускает неизменившиеся плейлисты по `snapshot_id`. Для
+Яндекс.Музыки вычисляется детерминированный SHA-256 по версии и упорядоченному
+содержимому плейлиста. Сырые и нормализованные значения сохраняются вместе.
+Для одного источника одновременно выполняется только один импорт. Совпадающий
+запрос возвращает уже активную задачу, а несовместимый refresh/full-import —
+`409` с ID задачи, завершения которой нужно дождаться.
+
+После обновления с этапа 2 один раз повторно запустите `/api/library/scan`:
+скан идемпотентно переведёт существующий каталог на те же norm-ключи, которые
+используются импортерами плейлистов.
+
 ## MusicBrainz
 
 Обогащение включается через `MUSICBRAINZ_ENABLED=true`. Перед включением
@@ -51,21 +78,24 @@ docker compose run --rm backend pytest -q
 ```
 
 Тесты генерируют три коротких FLAC через ffmpeg, проверяют повторный скан,
-fallback, SHA-1-дедупликацию, API и MusicBrainz с моками. Реальная проверка
-MusicBrainz выполняется отдельно после настройки корректного User-Agent.
+fallback, SHA-1-дедупликацию, API, MusicBrainz, Spotify и Яндекс.Музыку с
+моками. Реальная проверка внешних музыкальных API выполняется отдельно после
+настройки ключей и токенов.
 
 ## Структура
 
-- `backend/app/api/` — роутеры API (этапы 3–4 пока остаются заглушками)
+- `backend/app/api/` — роутеры API (matching/download остаются этапом 4)
 - `backend/app/models.py` — схема БД из MVP-плана
 - `backend/app/services/scanner.py` — локальный lossless-каталог
 - `backend/app/services/musicbrainz.py` — внешнее обогащение и Redis-кэш
+- `backend/app/services/spotify.py` — OAuth, refresh токенов и импорт Spotify
+- `backend/app/services/yandex.py` — импорт Яндекс.Музыки
+- `backend/app/services/normalize.py` — единые нормализованные ключи
 - `backend/app/workers/` — Celery-задачи
 - `data/music/` — музыкальная библиотека (mount `/music/library`)
 
 ## Дальше (по docs/music-service-mvp-plan.md)
 
-1. Этап 3: `services/spotify.py`, `services/yandex.py`, `services/normalize.py`
-2. Этап 4: `services/matcher.py`, `services/delivery.py`, PWA-фронтенд
+1. Этап 4: `services/matcher.py`, `services/delivery.py`, PWA-фронтенд
 
 Авторизация на MVP: заголовок `Authorization: Bearer <APP_AUTH_TOKEN>`.

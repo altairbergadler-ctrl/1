@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 
-from app.api import download, jobs, library, matching, playlists
+from app.api import download, jobs, library, matching, playlists, sources
 from app.schemas import HealthOut
 
-app = FastAPI(title="Music Service MVP", version="0.1.0")
+app = FastAPI(title="Music Service MVP", version="0.3.0")
 
 
 @app.get("/api/health", response_model=HealthOut)
@@ -12,6 +12,7 @@ def health():
 
 
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
+app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(matching.router, prefix="/api/matching", tags=["matching"])
 app.include_router(download.router, prefix="/api/download", tags=["download"])

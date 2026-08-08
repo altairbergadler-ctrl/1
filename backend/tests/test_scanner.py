@@ -8,12 +8,19 @@ from mutagen.flac import FLAC
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
-from app.models import Album, Artist, File, Track
+from app.models import Album, Artist, File, PlaylistItem, Track
 from app.services import scanner as scanner_service
+from app.services.normalize import (
+    normalize_album,
+    normalize_artist,
+    normalize_playlist_item,
+    normalize_title,
+)
 from app.services.scanner import (
     LibraryPathError,
     _tag_value,
     iter_audio_files,
+    normalize_catalog_key,
     read_audio_metadata,
     scan_library,
 )
@@ -107,6 +114,90 @@ def test_scan_three_flac_files_is_idempotent(db, three_flac_library):
     assert _count(db, Artist) == 2
     rescanned = db.scalars(select(File)).all()
     assert all(item.scanned_at >= scanned_at[item.id] for item in rescanned)
+
+
+@pytest.mark.parametrize(
+    ("raw", "field_normalizer"),
+    [
+        ("Artist (feat. Guest)", normalize_artist),
+        ("Album (2024 Remaster)", normalize_album),
+        ("Song [Live]", normalize_title),
+    ],
+)
+def test_catalog_normalizer_uses_shared_normalization_contract(raw, field_normalizer):
+    assert normalize_catalog_key(raw) == field_normalizer(raw)
+
+
+def test_scanned_flac_and_playlist_item_store_identical_normalized_keys(
+    db, three_flac_library
+):
+    path = next(three_flac_library.rglob("01 - First Track.flac"))
+    artist_raw = "Main Artist (feat. Guest)"
+    album_raw = "Album — Name (2024 Remaster)"
+    title_raw = "Song – Title [Live]"
+    audio = FLAC(path)
+    audio["artist"] = [artist_raw]
+    audio["album"] = [album_raw]
+    audio["title"] = [title_raw]
+    audio.save()
+
+    result = scan_library(db, three_flac_library)
+    normalized = normalize_playlist_item(artist_raw, title_raw, album_raw)
+    imported_item = PlaylistItem(
+        position=0,
+        artist_raw=artist_raw,
+        title_raw=title_raw,
+        album_raw=album_raw,
+        **normalized,
+    )
+    scanned_file = db.scalar(select(File).where(File.path == str(path.resolve())))
+
+    assert result.failed == 0
+    assert (
+        scanned_file.track.album.artist.name_norm,
+        scanned_file.track.album.title_norm,
+        scanned_file.track.title_norm,
+    ) == (
+        imported_item.artist_norm,
+        imported_item.album_norm,
+        imported_item.title_norm,
+    )
+    assert normalized == {
+        "artist_norm": "main artist",
+        "title_norm": "song-title",
+        "album_norm": "album-name",
+    }
+
+
+def test_repeat_scan_relinks_legacy_catalog_norms_without_changing_file(
+    db, three_flac_library
+):
+    path = next(three_flac_library.rglob("03 - Fallback Title.flac"))
+    scan_library(db, three_flac_library)
+    library_file = db.scalar(select(File).where(File.path == str(path.resolve())))
+    old_track_id = library_file.track_id
+    library_file.track.album.artist.name_norm = "legacy fallback artist"
+    library_file.track.album.title_norm = "legacy fallback album"
+    library_file.track.title_norm = "legacy fallback title"
+    library_file.track.album.artist.mbid = "artist-mbid"
+    library_file.track.album.mbid = "album-mbid"
+    library_file.track.mbid = "recording-mbid"
+    library_file.track.isrc = "USAAA2400999"
+    db.commit()
+
+    result = scan_library(db, three_flac_library)
+    db.refresh(library_file)
+
+    assert result.updated == 1
+    assert result.unchanged == 2
+    assert library_file.track_id != old_track_id
+    assert library_file.track.album.artist.name_norm == "fallback artist"
+    assert library_file.track.album.title_norm == "fallback album"
+    assert library_file.track.title_norm == "fallback title"
+    assert library_file.track.album.artist.mbid == "artist-mbid"
+    assert library_file.track.album.mbid == "album-mbid"
+    assert library_file.track.mbid == "recording-mbid"
+    assert library_file.track.isrc == "USAAA2400999"
 
 
 def test_duplicate_sha1_does_not_create_a_file_row(db, three_flac_library):
