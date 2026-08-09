@@ -4,6 +4,8 @@ Hi-Res музыкальный архив: импорт плейлистов Spot
 матчинг с локальной lossless-библиотекой, bit-perfect выдача на смартфон.
 
 ТЗ: `docs/music-service-logic.md`, `docs/music-service-mvp-plan.md`.
+Итоги реальной MVP-приёмки и точка входа для продолжения разработки:
+`docs/music-service-handoff.md`.
 
 ## Запуск
 
@@ -143,7 +145,9 @@ fallback, SHA-1-дедупликацию, API, MusicBrainz, Spotify и Янде�
 - `backend/app/workers/` — Celery-задачи
 - `frontend/` — адаптивная PWA и Nginx reverse proxy
 - `data/music/` — музыкальная библиотека (mount `/music/library`)
+- `docs/music-service-handoff.md` — проверенное состояние MVP и следующие итерации
 
 Этап 4 завершает функциональный scope MVP из
-`docs/music-service-mvp-plan.md`. Проверка на конкретном смартфоне и реальные
-Spotify/Яндекс API требуют пользовательского окружения, Tailscale и credentials.
+`docs/music-service-mvp-plan.md`. Реальная MVP-приёмка Spotify/Яндекс API,
+локальной библиотеки и смартфона завершена 2026-08-09; детали и известные
+ограничения зафиксированы в handoff-документе.

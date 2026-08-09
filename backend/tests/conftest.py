@@ -14,6 +14,7 @@ os.environ["DATABASE_URL"] = "sqlite+pysqlite://"
 os.environ["REDIS_URL"] = "redis://localhost:6379/15"
 os.environ["MUSIC_LIBRARY_PATH"] = "./test-music"
 os.environ["APP_AUTH_TOKEN"] = "test-auth-token-12345"
+os.environ["AUTH_COOKIE_SECURE"] = "false"
 os.environ["MUSICBRAINZ_ENABLED"] = "false"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "false"
 

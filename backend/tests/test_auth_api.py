@@ -26,3 +26,17 @@ def test_bearer_auth_remains_supported(api_client, auth_headers):
     response = api_client.get("/api/playlists", headers=auth_headers)
 
     assert response.status_code == 200
+
+
+def test_login_marks_cookie_secure_when_configured(api_client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "auth_cookie_secure", True)
+
+    response = api_client.post(
+        "/api/auth/login",
+        json={"token": "test-auth-token-12345"},
+    )
+
+    assert response.status_code == 200
+    assert "Secure" in response.headers["set-cookie"]
