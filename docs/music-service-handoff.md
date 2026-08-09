@@ -83,8 +83,16 @@ docker compose run --rm `
 3. Tailscale и его Serve-конфигурация установлены на Windows-хосте,
    а не хранятся в репозитории. Точный HTTPS URL получается из
    `tailscale status`; не добавлять его в публичную документацию.
-4. Qobuz не интегрирован. `qobuz-dl` не устанавливался и не получал
-   учётные данные.
+4. Qobuz интегрирован на условиях **RESTRICT** из
+   `docs/qobuz-dl-assessment.md`: секреты только через env, скачивание только в
+   staging, перенос в библиотеку после верификации и только из worker, один
+   активный qobuz-job, лимиты и задержки. Live-проверка выполнена 2026-08-09:
+   классический логин email+пароль Qobuz отклоняет (переход на OAuth), поэтому
+   авторизация — токеном браузерной сессии (`QOBUZ_AUTH_TOKEN`/`QOBUZ_USER_ID`,
+   addendum раздел 8 assessment-документа). С токеном подтверждены `user/get`
+   (тариф Studio), поиск и реальное скачивание 24/96 FLAC с верификацией и
+   переносом в библиотеку. Осталось проверить в Docker: `docker compose up
+   --build` и fetch-missing на реальной библиотеке.
 
 ## 5. Операционный минимум
 
@@ -107,7 +115,9 @@ docker compose exec -T worker celery -A app.workers.celery_app.celery inspect pi
 - `APP_AUTH_TOKEN`;
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`;
 - `YANDEX_TOKEN`;
-- `MUSIC_LIBRARY_HOST_PATH`;
+- `QOBUZ_ENABLED`, `QOBUZ_EMAIL`, `QOBUZ_PASSWORD` (опционально, см. раздел
+  «Qobuz» в README и `docs/qobuz-dl-assessment.md`);
+- `MUSIC_LIBRARY_HOST_PATH`, `QOBUZ_STAGING_HOST_PATH`;
 - `AUTH_COOKIE_SECURE`;
 - PostgreSQL/Redis settings.
 
@@ -124,10 +134,22 @@ Amperfy/desktop и выбранный минимальный API-профиль.
 
 ### 6.2 `qobuz-dl` assessment
 
-Отдельный security/terms/code/dependency audit по
-`docs/music-service-mvp-plan.md`. Результат — `docs/qobuz-dl-assessment.md` и решение
-`allow / restrict / reject`. До аудита не устанавливать пакет, не передавать ему
-пароль Qobuz и не давать доступ к `.env`, Docker socket, базе и `X:\Music`.
+Выполнен. Audit — `docs/qobuz-dl-assessment.md`, решение **RESTRICT**. Интеграция
+реализована в рамках этих ограничений (2026-08-09):
+
+- `backend/app/services/qobuz.py` — ленивая обёртка над `qobuz-dl==0.9.9.10`
+  (клиент с Redis-кэшем bundle, поиск, fuzzy-выбор кандидата, скачивание в
+  staging, верификация mutagen, перенос в библиотеку без перезаписи);
+- `backend/app/api/qobuz.py` — `status`/`connect`/`search`/`download-url`/
+  `fetch-missing`, активен только один qobuz-job;
+- `qobuz_download_task` в `backend/app/workers/tasks.py` — pipeline
+  staging → verify → library → scan → matching с lease/heartbeat/retry-паттерном
+  остальных тасок; ошибки конфигурации/авторизации — без retry;
+- `docker-compose.yml`: staging-mount обоим сервисам, `/music/library` rw
+  только у `worker` (backend остаётся read-only);
+- тесты `backend/tests/test_qobuz.py` — моки на границе сервиса, end-to-end
+  fetch-missing на сгенерированных FLAC; реальный логин Qobuz не проверялся
+  (нужны `QOBUZ_EMAIL`/`QOBUZ_PASSWORD`, см. п. 4).
 
 ### 6.3 Release 2
 

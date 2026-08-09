@@ -206,3 +206,46 @@ class MatchResolveOut(BaseModel):
     confidence: float
     method: str
     status: PlaylistItemStatus
+
+
+# --- Схемы интеграции Qobuz (RESTRICT, docs/qobuz-dl-assessment.md) ---------
+#
+# В Out-схемах никогда не бывает секретов: только нечувствительные флаги,
+# лимиты, тариф (label) и публичные поля каталога Qobuz. In-схемы принимают
+# минимум данных (url / playlist_id) с жёсткой валидацией длин и диапазонов.
+
+
+class QobuzStatusOut(BaseModel):
+    enabled: bool
+    configured: bool
+    quality: int
+    max_tracks_per_run: int
+
+
+class QobuzConnectOut(BaseModel):
+    connected: bool
+    label: str | None = None
+
+
+class QobuzSearchItemOut(BaseModel):
+    kind: str  # track | album
+    qobuz_id: str
+    artist: str
+    title: str
+    album: str | None = None
+    duration_ms: int | None = None
+    isrc: str | None = None
+    hires: bool
+    url: str
+
+
+class QobuzSearchOut(BaseModel):
+    items: list[QobuzSearchItemOut]
+
+
+class QobuzDownloadUrlIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class QobuzFetchMissingIn(BaseModel):
+    playlist_id: int = Field(gt=0)

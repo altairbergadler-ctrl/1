@@ -17,6 +17,12 @@ os.environ["APP_AUTH_TOKEN"] = "test-auth-token-12345"
 os.environ["AUTH_COOKIE_SECURE"] = "false"
 os.environ["MUSICBRAINZ_ENABLED"] = "false"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "false"
+# Isolate tests from a real local .env (Qobuz credentials must never leak in).
+os.environ["QOBUZ_ENABLED"] = "false"
+os.environ["QOBUZ_AUTH_TOKEN"] = ""
+os.environ["QOBUZ_USER_ID"] = ""
+os.environ["QOBUZ_EMAIL"] = ""
+os.environ["QOBUZ_PASSWORD"] = ""
 
 from app.db import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402

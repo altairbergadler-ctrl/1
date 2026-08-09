@@ -251,6 +251,12 @@ button[disabled] {
   border-radius: 24px;
 }
 
+.qobuz-source {
+  min-height: 0;
+  gap: 4px;
+  margin-bottom: 24px;
+}
+
 .card h3,
 .track-title,
 .candidate-title {

@@ -43,6 +43,9 @@ services:
         source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
         target: /music/library
         read_only: true
+      - type: bind
+        source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
+        target: /music/staging
     ports:
       - "8000:8000"
     depends_on:
@@ -59,10 +62,15 @@ services:
     command: celery -A app.workers.celery_app.celery worker --loglevel=INFO
     volumes:
       - ./backend:/code
+      # Qobuz downloads are written to the library only by the worker after
+      # staging verification (docs/qobuz-dl-assessment.md, раздел 5), поэтому
+      # только у worker библиотека read-write; backend остаётся read-only.
       - type: bind
         source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
         target: /music/library
-        read_only: true
+      - type: bind
+        source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
+        target: /music/staging
     depends_on:
       db:
         condition: service_healthy
