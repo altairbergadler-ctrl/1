@@ -227,7 +227,40 @@ Spotify/Yandex OAuth ──▶ playlist_items (raw + norm + isrc)
 
 ---
 
-## 8. Что подключается в релизе 2 (без переработки MVP)
+## 8. Исследование OpenSubsonic-интеграции (после MVP acceptance)
+
+Это отдельная research/design-итерация после тега `v0.1.0` и до начала
+Release 2. Она не включает реализацию API, миграции БД или замену
+текущей PWA.
+
+- [ ] Изучить актуальную спецификацию OpenSubsonic и выделить минимальный
+  read-only профиль для каталога, плейлистов, streaming и download.
+- [ ] Составить матрицу совместимости клиентов: Symfonium (Android),
+  Ultrasonic (Android), Amperfy (iOS/iPadOS) и один desktop-клиент.
+- [ ] Проверить методы авторизации: Subsonic token+salt и OpenSubsonic API key;
+  не переиспользовать `APP_AUTH_TOKEN` как пароль плеера.
+- [ ] Сопоставить OpenSubsonic endpoints с текущей БД и API: `ping`,
+  `getMusicFolders`, `getArtists`, `getArtist`, `getAlbum`, `getSong`, `search3`,
+  `getPlaylists`, `getPlaylist`, `stream`, `download`, `getCoverArt`.
+- [ ] Отдельно изучить поведение импортированных Spotify/Яндекс
+  плейлистов: только `READY`-треки, `readonly`, порядок треков и
+  обновление «Мне нравится».
+- [ ] На реальных устройствах проверить FLAC/Hi-Res, HTTP Range, gapless,
+  Unicode-метаданные, большие плейлисты, ручной и автоматический
+  offline-cache, повторную синхронизацию и работу через Tailscale HTTPS.
+- [ ] Описать модель угроз: учётные данные плеера, отзыв доступа,
+  rate limit, пределы Tailscale-сети и запрет публичного Funnel по умолчанию.
+- [ ] Создать `docs/open-subsonic-integration-plan.md` с выбранным профилем
+  совместимости, картой endpoints, этапами реализации, тестами,
+  рисками, оценкой объёма и явными границами scope.
+
+**Готово, когда:** матрица совместимости подтверждена на реальных
+клиентах, выбран минимальный безопасный API-профиль, а план реализации
+письменно согласован до изменения кода.
+
+---
+
+## 9. Что подключается в релизе 2 (без переработки MVP)
 - Tracker Scraper → пишет в wantlist из `matches(status=MISSING)`
 - qBittorrent API: авто-добавление раздач, вебхук завершения → триггер `/api/library/scan`
 - Ре-матчинг по расписанию (Celery beat): MISSING → READY
