@@ -719,6 +719,10 @@ def run_matching_task(
 @celery.task(
     bind=True,
     name="qobuz_download",
+    # max_retries=2: временные сбои сети/Qobuz повторяем, но не вечно —
+    # аккаунт дороже (rate-limit/бан, assessment §5).
+    # acks_late + reject_on_worker_lost: подтверждение после выполнения и
+    # перевыход задачи при гибели worker'а — как у остальных тасок проекта.
     max_retries=2,
     acks_late=True,
     reject_on_worker_lost=True,
@@ -732,6 +736,19 @@ def qobuz_download_task(
 ):
     """Download from Qobuz to staging, verify, import, scan, then re-match."""
 
+    # Задание выполняет полный pipeline (ограничения RESTRICT, assessment
+    # §3.5 и §7):
+    #   staging → верификация → перенос в библиотеку → scan → matching.
+    # Скачанное НИКОГДА не пишется в MUSIC_LIBRARY_PATH напрямую: запись в
+    # библиотеку делает только worker (в docker-compose rw-mount есть лишь у
+    # него; backend работает read-only), только после верификации mutagen.
+    #
+    # Lease/heartbeat-паттерн скопирован с run_matching_task:
+    #   - старт атомарно переводит job в running и назначает lock_owner;
+    #   - _renew_job_lease обновляет heartbeat_at и payload-прогресс —
+    #     именно по heartbeat API распознаёт зависшие задания (stale-cutoff);
+    #   - если lease отобран (новый запрос погасил задание как stale),
+    #     JobLeaseLost останавливает работу без записи в чужой job.
     db = SessionLocal()
     task_id = str(self.request.id or f"direct-qobuz-{job_id}")[:64]
     try:
@@ -739,6 +756,8 @@ def qobuz_download_task(
         if job is None:
             return {"status": "missing_job", "job_id": job_id}
         if job.status in (JobStatus.done, JobStatus.failed):
+            # Повторная доставка уже завершённой задачи (acks_late): просто
+            # возвращаем сохранённый результат, ничего не выполняя заново.
             return json.loads(job.payload or "{}")
 
         started_id = db.scalar(
@@ -760,6 +779,8 @@ def qobuz_download_task(
             .execution_options(synchronize_session=False)
         )
         if started_id is None:
+            # Задание уже взял другой worker или его погасили как stale —
+            # этот экземпляр тихо завершается, ничего не выполняя.
             db.rollback()
             return {"status": "already_running", "job_id": job_id}
         db.commit()
@@ -769,6 +790,9 @@ def qobuz_download_task(
         downloads: dict = {}
         collected_files: list = []
         if mode == "url":
+            # Режим download-url: скачать один альбом/трек по ссылке.
+            # Перед долгим сетевым этапом обновляем heartbeat и фазу, чтобы
+            # задание не выглядело зависшим для stale-cutoff.
             _renew_job_lease(
                 db,
                 job_id,
@@ -797,6 +821,10 @@ def qobuz_download_task(
                 raise ValueError(f"Playlist {playlist_id} does not exist")
 
             def update_download_progress(summary):
+                # Прогресс по каждому треку → heartbeat + payload. Это и
+                # защита от stale-cutoff на долгих последовательных скачках
+                # (лимит QOBUZ_MAX_TRACKS_PER_RUN), и живой прогресс для
+                # фронтенда через GET /api/jobs/{id}.
                 _renew_job_lease(
                     db,
                     job_id,
@@ -823,6 +851,10 @@ def qobuz_download_task(
             raise ValueError(f"Unsupported qobuz download mode: {mode}")
 
         _renew_job_lease(db, job_id, task_id)
+        # Этап 2 pipeline: перенос верифицированного аудио из staging в
+        # библиотеку. Существующие файлы не перезаписываются (конфликты
+        # остаются в staging, попадают в отчёт), не-аудио отброшено ещё на
+        # верификации. Запись идёт только здесь, в worker'е (assessment §5).
         import_report = import_files_to_library(
             collected_files,
             settings.qobuz_staging_path,
@@ -830,6 +862,9 @@ def qobuz_download_task(
         )
 
         def mark_scan_lock_acquired():
+            # Скан захватил process-level блокировку библиотеки → подтверждаем
+            # lease задания перед длинным этапом (тот же приём, что в
+            # scan_library_task).
             _claim_job_lease(db, job_id, task_id)
 
         def update_scan_progress(summary):
@@ -851,6 +886,10 @@ def qobuz_download_task(
             )
 
         try:
+            # Этап 3 pipeline: инлайн-скан библиотеки, чтобы новые файлы
+            # попали в каталог (треки/альбомы/Files) сразу, без ожидания
+            # ручного /api/library/scan. Блокировка скана та же, что и у
+            # обычной scan_library_task, — конкуренции двух сканов не будет.
             scan_summary = scan_library(
                 db,
                 settings.music_library_path,
@@ -859,6 +898,9 @@ def qobuz_download_task(
             )
             scan_payload: dict = {"status": "completed", **scan_summary.to_dict()}
         except ScanAlreadyRunning:
+            # Другой скан уже идёт: задание НЕ падает. Файлы уже в библиотеке
+            # и попадут в каталог тем сканом, поэтому помечаем этап deferred
+            # и пропускаем matching (матчить по неполному каталогу нельзя).
             db.rollback()
             scan_payload = {
                 "status": "deferred",
@@ -867,6 +909,8 @@ def qobuz_download_task(
 
         matching_payload = None
         if mode == "fetch_missing" and scan_payload.get("status") == "completed":
+            # Этап 4 pipeline (только fetch-missing): повторный матчинг
+            # плейлиста — скачанные треки должны перейти MISSING → READY.
             matching_summary = run_matching(db, playlist_id=playlist_id)
             matching_payload = matching_summary.to_dict()
 
@@ -886,6 +930,13 @@ def qobuz_download_task(
         return json.loads(final_payload)
     except (QobuzConfigurationError, QobuzAuthError) as exc:
         # Credentials/configuration problems cannot be fixed by a retry.
+        #
+        # Ошибки конфигурации и авторизации завершают задание БЕЗ retry:
+        # повтор с теми же неверными креденшелами/протухшим токеном ничего не
+        # изменит, а лишние попытки логина рискуют вызвать временный бан
+        # аккаунта (assessment §5: риск rate-limit/бан Qobuz). В error
+        # записываем только имя типа — без текстов, потенциально содержащих
+        # данные ответа провайдера.
         db.rollback()
         updated_id = db.scalar(
             update(Job)
@@ -910,9 +961,16 @@ def qobuz_download_task(
         db.commit()
         return {"status": "failed", "job_id": job_id, "error": type(exc).__name__}
     except JobLeaseLost:
+        # Lease отобран (задание погасили как stale или заменили): тихо
+        # останавливаемся, НЕ трогая чужой job — все дальнейшие записи
+        # выполняет владелец актуального lease.
         db.rollback()
         return {"status": "lease_lost", "job_id": job_id}
     except Exception as exc:
+        # Все прочие сбои (сеть, провайдер, диск) считаются потенциально
+        # временными: стандартный retry-паттерн проекта — job возвращается в
+        # pending, Celery повторяет с backoff countdown=min(120, 2**retries),
+        # после исчерпания max_retries задание фиксируется failed.
         db.rollback()
         retrying = self.request.retries < self.max_retries
         updated_id = db.scalar(

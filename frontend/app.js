@@ -173,6 +173,11 @@ function playlistCard(playlist) {
   `;
 }
 
+// Карточка источника Qobuz на странице плейлистов. Показывает состояние
+// интеграции по GET /api/qobuz/status: выключена (enabled=false → серое
+// «не настроен»), включена без креденшелов, либо готова к проверке логина.
+// Кнопка «Подключить» доступна только когда сервис включён и креденшелы
+// заданы в .env — сама проверка идёт через POST /api/qobuz/connect.
 function qobuzSourceCard(status) {
   const stateText = !status
     ? "статус недоступен"
@@ -200,6 +205,8 @@ async function renderPlaylists() {
   try {
     const [data, qobuzStatus] = await Promise.all([
       api("/api/playlists?limit=200"),
+      // Статус Qobuz подтягиваем мягко: если роутер недоступен, карточка
+      // просто покажет «статус недоступен», а список плейлистов не пострадает.
       api("/api/qobuz/status").catch(() => null),
     ]);
     app.innerHTML = shell(`
@@ -283,6 +290,10 @@ async function renderPlaylist(playlistId) {
           </div>
           <div class="action-row">
             <button type="button" data-action="match" data-playlist-id="${playlist.id}">Сопоставить</button>
+            ${/* Кнопка докачки с Qobuz появляется, только когда в плейлисте есть
+                 MISSING-треки: POST /api/qobuz/fetch-missing поставит задание,
+                 которое скачает недостающее в staging, перенесёт в библиотеку
+                 и повторит матчинг (pipeline на стороне worker'а). */""}
             ${playlist.summary.missing > 0 ? `<button class="secondary" type="button" data-action="qobuz-fetch" data-playlist-id="${playlist.id}">⬇ Скачать missing с Qobuz (${playlist.summary.missing})</button>` : ""}
             <a class="button secondary" href="/api/download/playlist/${playlist.id}" download>Скачать ZIP</a>
             <a class="button ghost" href="/api/download/playlist/${playlist.id}/m3u8" download>M3U8</a>
@@ -402,6 +413,11 @@ async function waitForJob(jobId, failureLabel = "Задание завершил
   }
 }
 
+// Проверка подключения Qobuz: POST /api/qobuz/connect создаёт клиента
+// (фактический логин). При успехе показываем label тарифа (например Studio) —
+// подтверждение, что подписка активна; при 400/502/503 текст ошибки сервера
+// уходит в toast. Кнопка разблокируется только при ошибке: при успехе
+// состояние уже отражено в строке статуса, повторный клик не нужен.
 async function qobuzConnect(button) {
   button.disabled = true;
   try {
@@ -415,6 +431,14 @@ async function qobuzConnect(button) {
   }
 }
 
+// Запуск докачки MISSING-треков плейлиста с Qobuz. Создаём задание
+// (POST /api/qobuz/fetch-missing → 202), затем polling его статуса через
+// общий waitForJob (GET /api/jobs/{id} раз в 800 мс — тот же механизм, что и
+// у матчинга). По завершении показываем краткую сводку из payload.downloads
+// (скачано / не найдено / ошибок) и перезагружаем плейлист: статусы треков
+// уже обновил повторный матчинг внутри задания. При ошибке кнопка
+// разблокируется, чтобы можно было повторить; при успехе страница
+// перерисуется, и кнопка исчезнет вместе с MISSING-треками.
 async function qobuzFetchMissing(button) {
   button.disabled = true;
   try {

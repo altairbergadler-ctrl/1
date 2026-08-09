@@ -208,6 +208,13 @@ class MatchResolveOut(BaseModel):
     status: PlaylistItemStatus
 
 
+# --- Схемы интеграции Qobuz (RESTRICT, docs/qobuz-dl-assessment.md) ---------
+#
+# В Out-схемах никогда не бывает секретов: только нечувствительные флаги,
+# лимиты, тариф (label) и публичные поля каталога Qobuz. In-схемы принимают
+# минимум данных (url / playlist_id) с жёсткой валидацией длин и диапазонов.
+
+
 class QobuzStatusOut(BaseModel):
     enabled: bool
     configured: bool
