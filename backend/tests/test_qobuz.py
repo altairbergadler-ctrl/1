@@ -37,6 +37,8 @@ def _configure_qobuz(monkeypatch, *, enabled=True, email="user@example.com", pas
     monkeypatch.setattr("app.config.settings.qobuz_enabled", enabled)
     monkeypatch.setattr("app.config.settings.qobuz_email", email)
     monkeypatch.setattr("app.config.settings.qobuz_password", password)
+    monkeypatch.setattr("app.config.settings.qobuz_auth_token", "")
+    monkeypatch.setattr("app.config.settings.qobuz_user_id", "")
 
 
 class FakeQobuzClient:
@@ -514,6 +516,101 @@ def test_bundle_cache_roundtrip_and_unavailable_fallback(monkeypatch):
 def test_create_client_requires_configuration(monkeypatch):
     _configure_qobuz(monkeypatch, enabled=False)
     with pytest.raises(QobuzConfigurationError):
+        qobuz_service.create_qobuz_client()
+
+
+# --- token auth (browser session, Qobuz OAuth workaround) ---------------------------
+
+
+def _fake_modules_with_client(client_cls):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        bundle=None,
+        downloader=None,
+        qopy=SimpleNamespace(Client=client_cls),
+        get_url_info=None,
+        AuthenticationError=type("AuthenticationError", (Exception,), {}),
+        IneligibleError=type("IneligibleError", (Exception,), {}),
+        InvalidAppIdError=type("InvalidAppIdError", (Exception,), {}),
+        InvalidAppSecretError=type("InvalidAppSecretError", (Exception,), {}),
+        InvalidQuality=type("InvalidQuality", (Exception,), {}),
+        NonStreamable=type("NonStreamable", (Exception,), {}),
+    )
+
+
+def test_is_qobuz_configured_accepts_token_without_password(monkeypatch):
+    _configure_qobuz(monkeypatch, email="", password="")
+    assert qobuz_service.is_qobuz_configured() is False
+
+    monkeypatch.setattr("app.config.settings.qobuz_auth_token", "token-value")
+    assert qobuz_service.is_qobuz_configured() is True
+
+
+class TokenPathFakeClient:
+    login_called = False
+
+    def __init__(self, *args, **kwargs):
+        TokenPathFakeClient.login_called = True
+        raise AssertionError("password login must be skipped for token auth")
+
+    def cfg_setup(self):
+        self.sec = self.secrets[0]
+
+    def api_call(self, epoint, **kwargs):
+        assert epoint == "user/get"
+        return {"credential": {"parameters": {"short_label": "Studio"}}}
+
+
+def test_create_client_token_path_skips_password_login(monkeypatch):
+    _configure_qobuz(monkeypatch)
+    monkeypatch.setattr("app.config.settings.qobuz_auth_token", " token-value ")
+    monkeypatch.setattr("app.config.settings.qobuz_user_id", "14097479")
+    monkeypatch.setattr(
+        qobuz_service,
+        "_get_bundle",
+        lambda force_refresh=False: ("123456789", ["sec1"]),
+    )
+    monkeypatch.setattr(
+        qobuz_service,
+        "_qobuz_modules",
+        lambda: _fake_modules_with_client(TokenPathFakeClient),
+    )
+    TokenPathFakeClient.login_called = False
+
+    client = qobuz_service.create_qobuz_client()
+
+    assert TokenPathFakeClient.login_called is False
+    assert client.uat == "token-value"
+    assert client.session.headers["X-User-Auth-Token"] == "token-value"
+    assert client.session.headers["X-App-Id"] == "123456789"
+    assert client.sec == "sec1"
+    assert client.label == "Studio"
+
+
+def test_token_client_rejected_token_maps_to_auth_error(monkeypatch):
+    import requests
+
+    class RejectingClient(TokenPathFakeClient):
+        def cfg_setup(self):
+            response = requests.Response()
+            response.status_code = 401
+            raise requests.exceptions.HTTPError(response=response)
+
+    _configure_qobuz(monkeypatch)
+    monkeypatch.setattr("app.config.settings.qobuz_auth_token", "stale-token")
+    monkeypatch.setattr(
+        qobuz_service,
+        "_get_bundle",
+        lambda force_refresh=False: ("123456789", ["sec1"]),
+    )
+    monkeypatch.setattr(
+        qobuz_service,
+        "_qobuz_modules",
+        lambda: _fake_modules_with_client(RejectingClient),
+    )
+
+    with pytest.raises(QobuzAuthError):
         qobuz_service.create_qobuz_client()
 
 

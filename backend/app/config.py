@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     qobuz_enabled: bool = False
     qobuz_email: str = ""
     qobuz_password: str = ""
+    # Browser session token workaround: Qobuz moved login to OAuth, so the
+    # classic email+password user/login flow of qobuz-dl can return 401 even
+    # with valid credentials. A user_auth_token extracted from play.qobuz.com
+    # localStorage works instead (docs/qobuz-dl-assessment.md, addendum).
+    qobuz_auth_token: str = ""
+    qobuz_user_id: str = ""
     # 5=MP3, 6=16/44.1, 7=24/<96kHz, 27=24/>96kHz (falls back to availability)
     qobuz_quality: int = 27
     qobuz_staging_path: str = "/music/staging"

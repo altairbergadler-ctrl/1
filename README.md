@@ -125,9 +125,16 @@ Worker кэширует только оболочку приложения; API 
 Переменные окружения (`.env`):
 
 - `QOBUZ_ENABLED=true` — включает интеграцию (по умолчанию выключена);
-- `QOBUZ_EMAIL`, `QOBUZ_PASSWORD` — учётные данные Qobuz. Живут только в
-  `.env`: в БД не сохраняются, API их не возвращает, наружу уходит лишь
-  MD5-хеш пароля по HTTPS;
+- `QOBUZ_AUTH_TOKEN`, `QOBUZ_USER_ID` — **основной способ авторизации**: токен
+  браузерной сессии. Qobuz перевёл вход на OAuth, и классический логин
+  email+пароль в qobuz-dl отвечает 401 даже с верными данными (проверено
+  2026-08-09, см. addendum в `docs/qobuz-dl-assessment.md`). Как получить:
+  войти на `play.qobuz.com` → DevTools → Application → Local Storage → ключ
+  `localuser` → поля `token` и `id`. Токен живёт только в `.env`: в БД не
+  сохраняется, API его не возвращает. Если connect/search начнут отвечать
+  400/401 — токен протух, повторите извлечение;
+- `QOBUZ_EMAIL`, `QOBUZ_PASSWORD` — запасной путь на случай, если Qobuz снова
+  починит `user/login`; наружу уходит лишь MD5-хеш пароля по HTTPS;
 - `QOBUZ_QUALITY` — `5` (MP3), `6` (16/44.1), `7` (24/<96 kHz),
   `27` (24/>96 kHz, по умолчанию) с автоматическим downgrade до доступного;
 - `QOBUZ_STAGING_PATH` (в контейнере `/music/staging`) и

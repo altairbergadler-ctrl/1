@@ -86,9 +86,13 @@ docker compose run --rm `
 4. Qobuz интегрирован на условиях **RESTRICT** из
    `docs/qobuz-dl-assessment.md`: секреты только через env, скачивание только в
    staging, перенос в библиотеку после верификации и только из worker, один
-   активный qobuz-job, лимиты и задержки. Реальный логин не проверялся: для
-   проверки нужно заполнить `QOBUZ_ENABLED=true`, `QOBUZ_EMAIL` и
-   `QOBUZ_PASSWORD` и вызвать `POST /api/qobuz/connect`.
+   активный qobuz-job, лимиты и задержки. Live-проверка выполнена 2026-08-09:
+   классический логин email+пароль Qobuz отклоняет (переход на OAuth), поэтому
+   авторизация — токеном браузерной сессии (`QOBUZ_AUTH_TOKEN`/`QOBUZ_USER_ID`,
+   addendum раздел 8 assessment-документа). С токеном подтверждены `user/get`
+   (тариф Studio), поиск и реальное скачивание 24/96 FLAC с верификацией и
+   переносом в библиотеку. Осталось проверить в Docker: `docker compose up
+   --build` и fetch-missing на реальной библиотеке.
 
 ## 5. Операционный минимум
 

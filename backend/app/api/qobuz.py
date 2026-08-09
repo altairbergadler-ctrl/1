@@ -34,6 +34,8 @@ _QOBUZ_QUEUE_LOCK_ID = 2026081005
 
 
 def _credentials_present() -> bool:
+    if str(settings.qobuz_auth_token or "").strip():
+        return True
     return bool(
         str(settings.qobuz_email or "").strip() and settings.qobuz_password
     )

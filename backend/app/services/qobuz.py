@@ -61,10 +61,12 @@ class QobuzSearchCandidate:
 
 
 def is_qobuz_configured(config: Any = settings) -> bool:
+    if not config.qobuz_enabled:
+        return False
+    if str(getattr(config, "qobuz_auth_token", "") or "").strip():
+        return True
     return bool(
-        config.qobuz_enabled
-        and str(config.qobuz_email or "").strip()
-        and config.qobuz_password
+        str(config.qobuz_email or "").strip() and config.qobuz_password
     )
 
 
@@ -173,22 +175,92 @@ def _get_bundle(*, force_refresh: bool = False) -> tuple[str, list[str]]:
     return _fetch_bundle()
 
 
+def _fetch_user_label(client) -> str | None:
+    """Best-effort membership label via user/get; never fatal."""
+
+    user_id = str(settings.qobuz_user_id or "").strip()
+    if not user_id:
+        return None
+    try:
+        data = client.api_call("user/get", user_id=user_id)
+        return (
+            data.get("credential", {})
+            .get("parameters", {})
+            .get("short_label")
+        )
+    except Exception:
+        return None
+
+
+def _build_token_client(modules, app_id: str, secrets: list[str]):
+    """Authenticate with a browser-session user_auth_token.
+
+    Qobuz moved web login to OAuth, so the classic user/login flow can reject
+    even valid email+password pairs. The play.qobuz.com session token is sent
+    as the X-User-Auth-Token header instead; cfg_setup still validates the
+    extracted app secrets via a signed track/getFileUrl probe.
+    """
+
+    import requests
+
+    token = settings.qobuz_auth_token.strip()
+    client = modules.qopy.Client.__new__(modules.qopy.Client)
+    client.secrets = secrets
+    client.id = str(app_id)
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0",
+            "X-App-Id": str(app_id),
+            "Content-Type": "application/json;charset=UTF-8",
+            "X-User-Auth-Token": token,
+        }
+    )
+    client.session = session
+    client.base = "https://www.qobuz.com/api.json/0.2/"
+    client.sec = None
+    client.uat = token
+    client.label = None
+    try:
+        client.cfg_setup()
+    except modules.InvalidAppSecretError:
+        raise
+    except requests.exceptions.HTTPError as exc:
+        raise QobuzAuthError(
+            "Qobuz rejected the session token; re-extract QOBUZ_AUTH_TOKEN from the browser"
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        raise QobuzProviderError("Qobuz is unavailable") from exc
+    label = _fetch_user_label(client)
+    client.label = label or "token"
+    return client
+
+
 def create_qobuz_client():
     """Build an authenticated qopy.Client from env settings only.
 
-    The password leaves the process exclusively as an MD5 hex digest, exactly
-    like the upstream CLI does before initializing qopy.Client.
+    Token auth (QOBUZ_AUTH_TOKEN) is preferred; the email+password fallback
+    sends the password exclusively as an MD5 hex digest, exactly like the
+    upstream CLI does before initializing qopy.Client.
     """
 
     modules = _qobuz_modules()
     if not is_qobuz_configured():
         raise QobuzConfigurationError(
-            "QOBUZ_ENABLED, QOBUZ_EMAIL and QOBUZ_PASSWORD must be configured"
+            "QOBUZ_ENABLED plus QOBUZ_AUTH_TOKEN (or QOBUZ_EMAIL and "
+            "QOBUZ_PASSWORD) must be configured"
         )
-    password_md5 = hashlib.md5(settings.qobuz_password.encode("utf-8")).hexdigest()
+    use_token = bool(str(settings.qobuz_auth_token or "").strip())
+    password_md5 = (
+        None
+        if use_token
+        else hashlib.md5(settings.qobuz_password.encode("utf-8")).hexdigest()
+    )
     for attempt in range(2):
         app_id, secrets = _get_bundle(force_refresh=attempt == 1)
         try:
+            if use_token:
+                return _build_token_client(modules, app_id, secrets)
             return modules.qopy.Client(
                 settings.qobuz_email.strip(),
                 password_md5,
