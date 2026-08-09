@@ -22,6 +22,8 @@ class YandexClient(Protocol):
 
     def users_playlists_list(self, *args: Any, **kwargs: Any) -> Sequence[Any]: ...
 
+    def users_likes_tracks(self, *args: Any, **kwargs: Any) -> Any: ...
+
     def users_playlists(
         self, kind: str | int, user_id: str | int | None = None, **kwargs: Any
     ) -> Any: ...
@@ -144,6 +146,18 @@ def import_yandex_playlists(
             summary.failed += 1
             summary.errors.append(f"{external_id}: {type(exc).__name__}")
 
+    try:
+        liked_playlist = _load_liked_playlist(yandex)
+        if liked_playlist is not None:
+            result = _save_remote_playlist(db, source, yandex, liked_playlist)
+            setattr(summary, result, getattr(summary, result) + 1)
+    except Exception as exc:
+        db.rollback()
+        if isinstance(exc, SQLAlchemyError):
+            raise
+        summary.failed += 1
+        summary.errors.append(f"liked: {type(exc).__name__}")
+
     return summary
 
 
@@ -165,9 +179,12 @@ def refresh_yandex_playlist(
     yandex = client or create_yandex_client(_source_token(source))
     owner_id, kind = _split_playlist_id(playlist.external_id)
     try:
-        remote = yandex.users_playlists(kind, user_id=owner_id)
-        if isinstance(remote, Sequence) and not isinstance(remote, (str, bytes)):
-            remote = remote[0] if remote else None
+        if kind == "liked":
+            remote = _load_liked_playlist(yandex)
+        else:
+            remote = yandex.users_playlists(kind, user_id=owner_id)
+            if isinstance(remote, Sequence) and not isinstance(remote, (str, bytes)):
+                remote = remote[0] if remote else None
         if remote is None:
             raise YandexImportError("Yandex Music playlist was not found")
         result = _save_remote_playlist(db, source, yandex, remote)
@@ -180,6 +197,28 @@ def refresh_yandex_playlist(
     summary = YandexImportSummary()
     setattr(summary, result, 1)
     return summary
+
+
+def _load_liked_playlist(client: YandexClient) -> dict[str, Any] | None:
+    """Represent the special liked-tracks collection as a regular playlist."""
+
+    liked = client.users_likes_tracks()
+    if liked is None:
+        return None
+    owner_id = _get(liked, "uid")
+    if owner_id is None:
+        raise YandexImportError("Yandex liked tracks have no owner")
+    tracks = list(_get(liked, "tracks", default=[]) or [])
+    return {
+        "owner": {"uid": owner_id},
+        "uid": owner_id,
+        "kind": "liked",
+        "title": "Мне нравится",
+        "revision": _get(liked, "revision"),
+        "snapshot": None,
+        "track_count": len(tracks),
+        "tracks": tracks,
+    }
 
 
 def _save_remote_playlist(

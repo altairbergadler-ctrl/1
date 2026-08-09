@@ -39,7 +39,10 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/code
-      - ./data/music:/music/library:ro
+      - type: bind
+        source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
+        target: /music/library
+        read_only: true
     ports:
       - "8000:8000"
     depends_on:
@@ -56,7 +59,10 @@ services:
     command: celery -A app.workers.celery_app.celery worker --loglevel=INFO
     volumes:
       - ./backend:/code
-      - ./data/music:/music/library:ro
+      - type: bind
+        source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
+        target: /music/library
+        read_only: true
     depends_on:
       db:
         condition: service_healthy

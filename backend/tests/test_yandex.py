@@ -70,16 +70,20 @@ def playlist(
 
 
 class FakeYandexClient:
-    def __init__(self, summaries, details, tracks, *, broken_kinds=()):
+    def __init__(self, summaries, details, tracks, *, broken_kinds=(), liked=None):
         self.summaries = list(summaries)
         self.details = dict(details)
         self.track_map = dict(tracks)
         self.broken_kinds = set(broken_kinds)
+        self.liked = liked
         self.detail_calls = []
         self.track_calls = []
 
     def users_playlists_list(self):
         return self.summaries
+
+    def users_likes_tracks(self):
+        return self.liked
 
     def users_playlists(self, kind, user_id=None):
         self.detail_calls.append((kind, user_id))
@@ -174,6 +178,33 @@ def test_import_is_idempotent_and_maps_tracks_in_batches(
         db.scalars(select(PlaylistItem.id).order_by(PlaylistItem.position)).all()
         == first_item_ids
     )
+
+
+def test_imports_liked_tracks_as_a_stable_playlist(db, yandex_source):
+    refs = [track_ref("liked-1"), track_ref("liked-2")]
+    liked = obj(uid=42, revision=7, tracks=refs)
+    client = FakeYandexClient(
+        [],
+        {},
+        {
+            "liked-1:album-1": full_track("liked-1", title="First liked"),
+            "liked-2:album-1": full_track("liked-2", title="Second liked"),
+        },
+        liked=liked,
+    )
+
+    first = import_yandex_playlists(db, yandex_source, client=client)
+    second = import_yandex_playlists(db, yandex_source, client=client)
+
+    stored = db.scalar(select(Playlist).where(Playlist.external_id == "42:liked"))
+    assert first.imported == 1
+    assert second.skipped == 1
+    assert stored.name == "Мне нравится"
+    assert stored.track_count == 2
+    assert [item.title_raw for item in stored.items] == [
+        "First liked",
+        "Second liked",
+    ]
 
 
 def test_summary_with_empty_track_placeholder_loads_playlist_details(
@@ -304,6 +335,32 @@ def test_refresh_uses_stored_owner_and_kind(db, yandex_source):
     assert client.detail_calls == [(11, "42")]
     assert stored.name == "After"
     assert stored.items[0].title_raw == "Refreshed"
+
+
+def test_refresh_liked_playlist_uses_liked_tracks_endpoint(db, yandex_source):
+    stored = Playlist(
+        source_id=yandex_source.id,
+        external_id="42:liked",
+        name="Мне нравится",
+        snapshot_hash="old",
+        track_count=0,
+    )
+    db.add(stored)
+    db.commit()
+
+    client = FakeYandexClient(
+        [],
+        {},
+        {"liked-1:album-1": full_track("liked-1", title="New liked track")},
+        liked=obj(uid=42, revision=8, tracks=[track_ref("liked-1")]),
+    )
+
+    summary = refresh_yandex_playlist(db, stored, client=client)
+
+    assert summary.updated == 1
+    assert client.detail_calls == []
+    assert stored.track_count == 1
+    assert stored.items[0].title_raw == "New liked track"
 
 
 def test_snapshot_hash_is_deterministic_and_order_sensitive():
