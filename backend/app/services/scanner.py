@@ -15,7 +15,15 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Album, Artist, File as LibraryFile, Match, Track, utcnow
+from app.models import (
+    Album,
+    Artist,
+    File as LibraryFile,
+    Match,
+    MatchStatus,
+    Track,
+    utcnow,
+)
 from app.services.normalize import (
     normalize_album,
     normalize_artist,
@@ -98,6 +106,7 @@ class ScanSummary:
     unchanged: int = 0
     moved: int = 0
     duplicate_content: int = 0
+    removed: int = 0
     failed: int = 0
     album_ids: list[int] = field(default_factory=list)
     issues: list[ScanIssue] = field(default_factory=list)
@@ -682,6 +691,42 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
     return "added", album.id
 
 
+def _prune_missing_files(
+    db: Session,
+    root_path: Path,
+    present_paths: set[Path],
+) -> int:
+    """Remove catalog rows for files no longer present under the scanned root."""
+
+    removed = 0
+    library_files = db.scalars(select(LibraryFile)).all()
+    for library_file in library_files:
+        stored_path = Path(library_file.path).expanduser().resolve()
+        if not stored_path.is_relative_to(root_path) or stored_path in present_paths:
+            continue
+
+        track_id = library_file.track_id
+        db.delete(library_file)
+        db.flush()
+        removed += 1
+
+        has_file = db.scalar(
+            select(LibraryFile.id).where(LibraryFile.track_id == track_id).limit(1)
+        )
+        if has_file is not None:
+            continue
+
+        for match in db.scalars(select(Match).where(Match.track_id == track_id)):
+            match.track_id = None
+            match.confidence = 0.0
+            match.method = "none"
+            match.status = MatchStatus.missing
+        db.flush()
+        _prune_orphaned_track(db, track_id)
+
+    return removed
+
+
 def _scan_library_unlocked(
     db: Session,
     root: str | Path | None = None,
@@ -689,6 +734,7 @@ def _scan_library_unlocked(
 ) -> ScanSummary:
     root_path = Path(root or settings.music_library_path).expanduser().resolve()
     paths = list(iter_audio_files(root_path))
+    present_paths = {path.resolve() for path in paths}
     summary = ScanSummary(discovered=len(paths))
     touched_album_ids: set[int] = set()
 
@@ -733,6 +779,15 @@ def _scan_library_unlocked(
         summary.album_ids = sorted(touched_album_ids)
         if progress_callback is not None:
             progress_callback(summary)
+
+    try:
+        summary.removed = _prune_missing_files(db, root_path, present_paths)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+    if progress_callback is not None and summary.removed:
+        progress_callback(summary)
 
     return summary
 

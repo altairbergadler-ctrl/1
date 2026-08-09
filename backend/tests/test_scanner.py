@@ -8,7 +8,18 @@ from mutagen.flac import FLAC
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
-from app.models import Album, Artist, File, PlaylistItem, Track
+from app.models import (
+    Album,
+    Artist,
+    File,
+    Match,
+    MatchStatus,
+    Playlist,
+    PlaylistItem,
+    PlaylistSource,
+    ServiceEnum,
+    Track,
+)
 from app.services import scanner as scanner_service
 from app.services.normalize import (
     normalize_album,
@@ -114,6 +125,60 @@ def test_scan_three_flac_files_is_idempotent(db, three_flac_library):
     assert _count(db, Artist) == 2
     rescanned = db.scalars(select(File)).all()
     assert all(item.scanned_at >= scanned_at[item.id] for item in rescanned)
+
+
+def test_deleted_file_is_removed_from_catalog(db, three_flac_library):
+    scan_library(db, three_flac_library)
+    deleted = next(three_flac_library.rglob("03 - Fallback Title.flac"))
+    deleted.unlink()
+
+    result = scan_library(db, three_flac_library)
+
+    assert result.discovered == 2
+    assert result.removed == 1
+    assert _count(db, File) == 2
+    assert _count(db, Track) == 2
+    assert db.scalar(select(Artist).where(Artist.name == "Fallback Artist")) is None
+
+
+def test_deleting_last_file_invalidates_ready_match(db, three_flac_library):
+    scan_library(db, three_flac_library)
+    deleted = next(three_flac_library.rglob("03 - Fallback Title.flac"))
+    library_file = db.scalar(select(File).where(File.path == str(deleted.resolve())))
+    track_id = library_file.track_id
+    source = PlaylistSource(service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        external_id="deleted-track",
+        name="Deleted track",
+        track_count=1,
+    )
+    item = PlaylistItem(
+        playlist=playlist,
+        position=0,
+        artist_raw="Fallback Artist",
+        title_raw="Fallback Title",
+    )
+    match = Match(
+        playlist_item=item,
+        track_id=track_id,
+        confidence=1.0,
+        method="manual",
+        status=MatchStatus.ready,
+    )
+    db.add_all([source, playlist, item, match])
+    db.commit()
+    deleted.unlink()
+
+    result = scan_library(db, three_flac_library)
+    db.refresh(match)
+
+    assert result.removed == 1
+    assert match.status == MatchStatus.missing
+    assert match.track_id is None
+    assert match.method == "none"
+    assert match.confidence == 0.0
+    assert db.get(Track, track_id) is None
 
 
 @pytest.mark.parametrize(
