@@ -24,6 +24,18 @@ class Settings(BaseSettings):
 
     yandex_token: str = ""
 
+    # Qobuz downloads run under the RESTRICT rules of docs/qobuz-dl-assessment.md.
+    qobuz_enabled: bool = False
+    qobuz_email: str = ""
+    qobuz_password: str = ""
+    # 5=MP3, 6=16/44.1, 7=24/<96kHz, 27=24/>96kHz (falls back to availability)
+    qobuz_quality: int = 27
+    qobuz_staging_path: str = "/music/staging"
+    qobuz_max_tracks_per_run: int = Field(default=25, ge=1, le=500)
+    qobuz_request_delay_seconds: float = Field(default=1.0, ge=0)
+    qobuz_download_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
+    qobuz_embed_art: bool = True
+
     musicbrainz_enabled: bool = True
     musicbrainz_base_url: str = "https://musicbrainz.org/ws/2"
     musicbrainz_user_agent: str = ""

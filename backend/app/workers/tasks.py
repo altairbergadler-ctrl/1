@@ -15,6 +15,14 @@ from app.models import (
 )
 from app.services.musicbrainz import MusicBrainzClient, enrich_albums
 from app.services.matcher import run_matching
+from app.services.qobuz import (
+    QobuzAuthError,
+    QobuzConfigurationError,
+    create_qobuz_client,
+    download_url_to_staging,
+    fetch_missing_tracks,
+    import_files_to_library,
+)
 from app.services.scanner import ScanAlreadyRunning, scan_library
 from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
 from app.services.yandex import import_yandex_playlists, refresh_yandex_playlist
@@ -706,3 +714,240 @@ def run_matching_task(
         raise
     finally:
         db.close()
+
+
+@celery.task(
+    bind=True,
+    name="qobuz_download",
+    max_retries=2,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def qobuz_download_task(
+    self,
+    job_id: int,
+    mode: str,
+    playlist_id: int | None = None,
+    url: str | None = None,
+):
+    """Download from Qobuz to staging, verify, import, scan, then re-match."""
+
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-qobuz-{job_id}")[:64]
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "qobuz_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        client = create_qobuz_client()
+        downloads: dict = {}
+        collected_files: list = []
+        if mode == "url":
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {"phase": "downloading", "mode": mode, "url": url},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            collected_files = download_url_to_staging(
+                client,
+                url,
+                settings.qobuz_staging_path,
+                settings.qobuz_quality,
+                settings.qobuz_embed_art,
+            )
+            downloads = {
+                "url": url,
+                "downloaded": len(collected_files),
+                "files": [str(path) for path in collected_files],
+            }
+        elif mode == "fetch_missing":
+            playlist = db.get(Playlist, playlist_id)
+            if playlist is None:
+                raise ValueError(f"Playlist {playlist_id} does not exist")
+
+            def update_download_progress(summary):
+                _renew_job_lease(
+                    db,
+                    job_id,
+                    task_id,
+                    payload=json.dumps(
+                        {
+                            "phase": "downloading",
+                            "mode": mode,
+                            "playlist_id": playlist_id,
+                            "downloads": summary,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+
+            downloads, collected_files = fetch_missing_tracks(
+                db,
+                playlist,
+                client,
+                progress_callback=update_download_progress,
+            )
+        else:
+            raise ValueError(f"Unsupported qobuz download mode: {mode}")
+
+        _renew_job_lease(db, job_id, task_id)
+        import_report = import_files_to_library(
+            collected_files,
+            settings.qobuz_staging_path,
+            settings.music_library_path,
+        )
+
+        def mark_scan_lock_acquired():
+            _claim_job_lease(db, job_id, task_id)
+
+        def update_scan_progress(summary):
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "scanning",
+                        "mode": mode,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": summary.to_dict(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+        try:
+            scan_summary = scan_library(
+                db,
+                settings.music_library_path,
+                progress_callback=update_scan_progress,
+                lock_acquired_callback=mark_scan_lock_acquired,
+            )
+            scan_payload: dict = {"status": "completed", **scan_summary.to_dict()}
+        except ScanAlreadyRunning:
+            db.rollback()
+            scan_payload = {
+                "status": "deferred",
+                "reason": "another library scan is already running",
+            }
+
+        matching_payload = None
+        if mode == "fetch_missing" and scan_payload.get("status") == "completed":
+            matching_summary = run_matching(db, playlist_id=playlist_id)
+            matching_payload = matching_summary.to_dict()
+
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "mode": mode,
+                "downloads": downloads,
+                "import": import_report,
+                "scan": scan_payload,
+                "matching": matching_payload,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        _finish_job(db, job_id, task_id, final_payload)
+        return json.loads(final_payload)
+    except (QobuzConfigurationError, QobuzAuthError) as exc:
+        # Credentials/configuration problems cannot be fixed by a retry.
+        db.rollback()
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.failed,
+                error=f"Qobuz download failed ({type(exc).__name__})",
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return {"status": "failed", "job_id": job_id, "error": type(exc).__name__}
+    except JobLeaseLost:
+        db.rollback()
+        return {"status": "lease_lost", "job_id": job_id}
+    except Exception as exc:
+        db.rollback()
+        retrying = self.request.retries < self.max_retries
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "qobuz_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=(
+                    f"Qobuz download attempt {self.request.retries + 1} failed "
+                    f"({type(exc).__name__}); retry scheduled"
+                    if retrying
+                    else f"Qobuz download failed ({type(exc).__name__})"
+                ),
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(120, 2**self.request.retries),
+            )
+        raise
+    finally:
+        db.close()
+

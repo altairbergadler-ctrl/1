@@ -9,3 +9,5 @@ htmlcov/
 data/music/*
 !data/music/.gitkeep
 
+data/qobuz-staging/
+

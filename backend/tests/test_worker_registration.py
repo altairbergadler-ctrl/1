@@ -12,6 +12,10 @@ def test_scan_task_is_registered():
     assert "scan_library" in celery.tasks
 
 
+def test_qobuz_download_task_is_registered():
+    assert "qobuz_download" in celery.tasks
+
+
 def test_scan_task_updates_job_lifecycle(session_factory, monkeypatch, tmp_path):
     session = session_factory()
     job = Job(type="scan_library", status=JobStatus.pending, payload="{}")
