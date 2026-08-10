@@ -257,6 +257,66 @@ button[disabled] {
   margin-bottom: 24px;
 }
 
+.qobuz-progress-card {
+  margin-bottom: 22px;
+  padding: 20px;
+  border: 1px solid rgb(240 179 90 / 32%);
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgb(240 179 90 / 9%), transparent 48%),
+    var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.qobuz-progress-card.failed {
+  border-color: rgb(239 123 115 / 40%);
+}
+
+.qobuz-progress-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.qobuz-progress-heading h2 {
+  font-size: clamp(24px, 4vw, 34px);
+}
+
+.qobuz-progress-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.qobuz-batch-line {
+  margin: 10px 0 0;
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.qobuz-progress-stats span {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgb(13 17 21 / 45%);
+  font-size: 12px;
+}
+
+.qobuz-progress-stats strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.qobuz-progress-error {
+  margin: 14px 0 0;
+  color: var(--missing);
+  font-size: 13px;
+}
+
 .card h3,
 .track-title,
 .candidate-title {
@@ -369,6 +429,45 @@ button[disabled] {
 
 .status-badge.missing,
 .status-badge.unmatched {
+  color: var(--missing);
+  border-color: rgb(239 123 115 / 32%);
+  background: rgb(239 123 115 / 7%);
+}
+
+.status-badge.qobuz-download,
+.status-badge.qobuz-job-state {
+  text-transform: none;
+  letter-spacing: 0.03em;
+}
+
+.status-badge.qobuz-download.queued,
+.status-badge.qobuz-download.searching,
+.status-badge.qobuz-download.downloading,
+.status-badge.qobuz-download.downloaded,
+.status-badge.qobuz-job-state.pending,
+.status-badge.qobuz-job-state.running {
+  color: var(--accent-strong);
+  border-color: rgb(240 179 90 / 38%);
+  background: rgb(240 179 90 / 9%);
+}
+
+.status-badge.qobuz-download.stored,
+.status-badge.qobuz-job-state.done {
+  color: var(--ready);
+  border-color: rgb(115 214 162 / 35%);
+  background: rgb(115 214 162 / 8%);
+}
+
+.status-badge.qobuz-download.ambiguous,
+.status-badge.qobuz-download.conflict {
+  color: var(--review);
+  border-color: rgb(240 179 90 / 35%);
+  background: rgb(240 179 90 / 8%);
+}
+
+.status-badge.qobuz-download.not_found,
+.status-badge.qobuz-download.failed,
+.status-badge.qobuz-job-state.failed {
   color: var(--missing);
   border-color: rgb(239 123 115 / 32%);
   background: rgb(239 123 115 / 7%);
@@ -554,6 +653,10 @@ button[disabled] {
 
   .candidate {
     grid-template-columns: 1fr;
+  }
+
+  .qobuz-progress-heading {
+    display: grid;
   }
 }
 

@@ -9,6 +9,7 @@ from app.models import (
     Job,
     JobStatus,
     Playlist,
+    PlaylistItem,
     PlaylistSource,
     ServiceEnum,
     utcnow,
@@ -22,10 +23,19 @@ from app.services.qobuz import (
     download_url_to_staging,
     fetch_missing_tracks,
     import_files_to_library,
+    mark_downloads_stored,
+    record_qobuz_download_attempts,
 )
 from app.services.scanner import ScanAlreadyRunning, scan_library
 from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
 from app.services.yandex import import_yandex_playlists, refresh_yandex_playlist
+from app.services.yandex_acquisition import (
+    YandexAcquisitionAuthError,
+    YandexAcquisitionConfigurationError,
+    create_yandex_acquisition_client,
+    fetch_missing_yandex_tracks,
+    record_yandex_download_attempts,
+)
 from app.workers.celery_app import celery
 
 
@@ -720,7 +730,7 @@ def run_matching_task(
     bind=True,
     name="qobuz_download",
     # max_retries=2: временные сбои сети/Qobuz повторяем, но не вечно —
-    # аккаунт дороже (rate-limit/бан, assessment §5).
+    # аккаунт дороже (rate-limit/бан, assessment section 7).
     # acks_late + reject_on_worker_lost: подтверждение после выполнения и
     # перевыход задачи при гибели worker'а — как у остальных тасок проекта.
     max_retries=2,
@@ -831,7 +841,11 @@ def qobuz_download_task(
                     task_id,
                     payload=json.dumps(
                         {
-                            "phase": "downloading",
+                            "phase": (
+                                "batch_pause"
+                                if summary.get("batch_state") == "paused"
+                                else "downloading"
+                            ),
                             "mode": mode,
                             "playlist_id": playlist_id,
                             "downloads": summary,
@@ -846,19 +860,74 @@ def qobuz_download_task(
                 playlist,
                 client,
                 progress_callback=update_download_progress,
+                job_id=job_id,
             )
         else:
             raise ValueError(f"Unsupported qobuz download mode: {mode}")
 
-        _renew_job_lease(db, job_id, task_id)
+        _renew_job_lease(
+            db,
+            job_id,
+            task_id,
+            payload=json.dumps(
+                {
+                    "phase": "importing",
+                    "mode": mode,
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
         # Этап 2 pipeline: перенос верифицированного аудио из staging в
         # библиотеку. Существующие файлы не перезаписываются (конфликты
         # остаются в staging, попадают в отчёт), не-аудио отброшено ещё на
-        # верификации. Запись идёт только здесь, в worker'е (assessment §5).
+        # верификации. Запись идёт только здесь, в worker'е (assessment section 6).
         import_report = import_files_to_library(
             collected_files,
             settings.qobuz_staging_path,
             settings.music_library_path,
+        )
+        if mode == "fetch_missing":
+            mark_downloads_stored(
+                downloads,
+                import_report,
+                settings.qobuz_staging_path,
+                settings.music_library_path,
+            )
+            item_ids = [
+                int(entry["item_id"])
+                for entry in downloads.get("items", [])
+                if entry.get("item_id") is not None
+            ]
+            playlist_items = {
+                item.id: item
+                for item in db.scalars(
+                    select(PlaylistItem).where(PlaylistItem.id.in_(item_ids))
+                )
+            }
+            record_qobuz_download_attempts(
+                db,
+                downloads,
+                playlist_items,
+                job_id,
+            )
+        _renew_job_lease(
+            db,
+            job_id,
+            task_id,
+            payload=json.dumps(
+                {
+                    "phase": "scanning",
+                    "mode": mode,
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                    "import": import_report,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         )
 
         def mark_scan_lock_acquired():
@@ -911,6 +980,23 @@ def qobuz_download_task(
         if mode == "fetch_missing" and scan_payload.get("status") == "completed":
             # Этап 4 pipeline (только fetch-missing): повторный матчинг
             # плейлиста — скачанные треки должны перейти MISSING → READY.
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "matching",
+                        "mode": mode,
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": scan_payload,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
             matching_summary = run_matching(db, playlist_id=playlist_id)
             matching_payload = matching_summary.to_dict()
 
@@ -918,6 +1004,7 @@ def qobuz_download_task(
             {
                 "phase": "completed",
                 "mode": mode,
+                "playlist_id": playlist_id,
                 "downloads": downloads,
                 "import": import_report,
                 "scan": scan_payload,
@@ -934,7 +1021,7 @@ def qobuz_download_task(
         # Ошибки конфигурации и авторизации завершают задание БЕЗ retry:
         # повтор с теми же неверными креденшелами/протухшим токеном ничего не
         # изменит, а лишние попытки логина рискуют вызвать временный бан
-        # аккаунта (assessment §5: риск rate-limit/бан Qobuz). В error
+        # аккаунта (assessment section 7: риск rate-limit/бан Qobuz). В error
         # записываем только имя типа — без текстов, потенциально содержащих
         # данные ответа провайдера.
         db.rollback()
@@ -1005,6 +1092,270 @@ def qobuz_download_task(
                 exc=exc,
                 countdown=min(120, 2**self.request.retries),
             )
+        raise
+    finally:
+        db.close()
+
+
+@celery.task(
+    bind=True,
+    name="yandex_download",
+    max_retries=2,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def yandex_download_task(self, job_id: int, playlist_id: int):
+    """Fetch missing tracks through yandex-music, import, scan and re-match."""
+
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-yandex-{job_id}")[:64]
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "yandex_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        playlist = db.get(Playlist, playlist_id)
+        if playlist is None:
+            raise ValueError(f"Playlist {playlist_id} does not exist")
+        client = create_yandex_acquisition_client(db)
+
+        def update_download_progress(summary):
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": (
+                            "batch_pause"
+                            if summary.get("batch_state") == "paused"
+                            else "downloading"
+                        ),
+                        "playlist_id": playlist_id,
+                        "downloads": summary,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+        downloads, collected_files = fetch_missing_yandex_tracks(
+            db,
+            playlist,
+            client,
+            progress_callback=update_download_progress,
+            job_id=job_id,
+        )
+        _renew_job_lease(
+            db,
+            job_id,
+            task_id,
+            payload=json.dumps(
+                {
+                    "phase": "importing",
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        import_report = import_files_to_library(
+            collected_files,
+            settings.yandex_staging_path,
+            settings.music_library_path,
+        )
+        mark_downloads_stored(
+            downloads,
+            import_report,
+            settings.yandex_staging_path,
+            settings.music_library_path,
+        )
+        item_ids = [
+            int(entry["item_id"])
+            for entry in downloads.get("items", [])
+            if entry.get("item_id") is not None
+        ]
+        playlist_items = {
+            item.id: item
+            for item in db.scalars(
+                select(PlaylistItem).where(PlaylistItem.id.in_(item_ids))
+            )
+        }
+        record_yandex_download_attempts(db, downloads, playlist_items, job_id)
+
+        _renew_job_lease(
+            db,
+            job_id,
+            task_id,
+            payload=json.dumps(
+                {
+                    "phase": "scanning",
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                    "import": import_report,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
+        def mark_scan_lock_acquired():
+            _claim_job_lease(db, job_id, task_id)
+
+        def update_scan_progress(summary):
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "scanning",
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": summary.to_dict(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+        try:
+            scan_summary = scan_library(
+                db,
+                settings.music_library_path,
+                progress_callback=update_scan_progress,
+                lock_acquired_callback=mark_scan_lock_acquired,
+            )
+            scan_payload: dict = {"status": "completed", **scan_summary.to_dict()}
+        except ScanAlreadyRunning:
+            db.rollback()
+            scan_payload = {
+                "status": "deferred",
+                "reason": "another library scan is already running",
+            }
+
+        matching_payload = None
+        if scan_payload.get("status") == "completed":
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "matching",
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": scan_payload,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            matching_payload = run_matching(db, playlist_id=playlist_id).to_dict()
+
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "playlist_id": playlist_id,
+                "downloads": downloads,
+                "import": import_report,
+                "scan": scan_payload,
+                "matching": matching_payload,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        _finish_job(db, job_id, task_id, final_payload)
+        return json.loads(final_payload)
+    except (YandexAcquisitionConfigurationError, YandexAcquisitionAuthError) as exc:
+        db.rollback()
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "yandex_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.failed,
+                error=f"Yandex download failed ({type(exc).__name__})",
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return {"status": "failed", "job_id": job_id, "error": type(exc).__name__}
+    except JobLeaseLost:
+        db.rollback()
+        return {"status": "lease_lost", "job_id": job_id}
+    except Exception as exc:
+        db.rollback()
+        retrying = self.request.retries < self.max_retries
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "yandex_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=(
+                    f"Yandex download attempt {self.request.retries + 1} failed "
+                    f"({type(exc).__name__}); retry scheduled"
+                    if retrying
+                    else f"Yandex download failed ({type(exc).__name__})"
+                ),
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(exc=exc, countdown=min(120, 2**self.request.retries))
         raise
     finally:
         db.close()

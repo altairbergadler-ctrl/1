@@ -1,74 +1,49 @@
-"""Qobuz downloads behind the RESTRICT rules of docs/qobuz-dl-assessment.md.
+"""Trusted Music Service boundary for the isolated Qobuz downloader.
 
-The qobuz-dl package is imported lazily inside factory functions so the app
-and tests start without the optional dependency. Secrets, passwords and auth
-tokens are never logged, stored in the database, or included in exceptions.
+The third-party qobuz-dl package is not installed in this process.  Provider
+credentials and outbound internet access live only in ``qobuz-sidecar``.  The
+main worker receives relative staging paths, verifies every file again, and is
+the only component allowed to move audio into the library.
 """
-
-# ============================================================================
-# Обёртка над сторонним пакетом qobuz-dl (пин qobuz-dl==0.9.9.10).
-#
-# Вся интеграция выполнена на условиях RESTRICT из
-# docs/qobuz-dl-assessment.md (итоговое решение — раздел 7):
-#   1. Секреты (пароль / user_auth_token / app-secrets) живут только в .env;
-#      они не пишутся в БД, не логируются и не включаются в тексты исключений.
-#   2. Скачивание идёт ТОЛЬКО в staging-каталог (QOBUZ_STAGING_PATH); в
-#      библиотеку файлы переносит import_files_to_library() после верификации
-#      и только из Celery-worker'а (см. docker-compose.yml: rw-mount у worker).
-#   3. Один активный qobuz-job, лимит треков за запуск и пауза между
-#      скачиваниями — защита от rate-limit/бана со стороны Qobuz (раздел 5).
-#   4. Авторизация: основной путь — токен браузерной сессии (addendum,
-#      раздел 8: Qobuz перевёл вход на OAuth и user/login отвечает 401),
-#      fallback — email + MD5(password), как в CLI апстрима.
-#
-# Пакет импортируется лениво (внутри функций), чтобы приложение и тесты
-# поднимались без установленной зависимости (assessment §1: используем
-# qobuz-dl только как библиотеку — bundle/qopy/downloader, без CLI).
-# ============================================================================
 
 from __future__ import annotations
 
 import hashlib
-import json
+import re
 import shutil
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Callable, Iterable
 
+import httpx
 from mutagen import File as MutagenFile
 from rapidfuzz.fuzz import token_set_ratio
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Match, MatchStatus, Playlist, PlaylistItem
+from app.models import Match, MatchStatus, Playlist, PlaylistItem, ProviderAttempt
+from app.services.matcher import normalize_isrc
+from app.services.normalize import normalize_album, normalize_artist, normalize_title
 
-# --- Константы интеграции ---------------------------------------------------
-
-# Форматы, которые Qobuz реально отдаёт на скачивание: FLAC (lossless/hi-res)
-# либо MP3 (quality=5). Только эти расширения проходят верификацию staging
-# (assessment §3.5: allowlist расширений до переноса в библиотеку).
-AUDIO_EXTENSIONS = frozenset({".flac", ".mp3"})
-
-# Redis-кэш извлечённых app_id/secrets веб-плеера Qobuz. Извлечение из
-# JS-бандла play.qobuz.com — хрупкая точка (assessment §3.2): смена вёрстки
-# ломает регулярные выражения, поэтому результат кэшируется на ~7 дней и
-# перевытягивается только при промахе кэша или InvalidAppSecretError.
-_BUNDLE_CACHE_KEY = "qobuz:bundle:v1"
-_BUNDLE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
-
-# Пороги выбора кандидата при поиске трека в каталоге Qobuz — сознательно
-# совпадают с fuzzy-каскадом services/matcher.py (порог 85, допуск ±5 с),
-# чтобы докачка была не строже и не слабее локального матчинга.
-_SEARCH_THRESHOLD = 85.0
-_DURATION_TOLERANCE_MS = 5_000
-
-# Ограничение MVP: по URL скачиваем только альбомы и отдельные треки.
-# playlist/artist/label осознанно не поддерживаются — отклоняем с понятной
-# ошибкой (задокументировано в README, раздел «Qobuz»).
+AUDIO_EXTENSIONS = frozenset({".flac"})
+_EXACT_DURATION_TOLERANCE_MS = 2_000
+_FUZZY_DURATION_TOLERANCE_MS = 3_000
+_FUZZY_AUTO_THRESHOLD = 95.0
+_FUZZY_COMPONENT_THRESHOLD = 92.0
+_FUZZY_AMBIGUITY_GAP = 5.0
 _SUPPORTED_URL_TYPES = frozenset({"album", "track"})
+_VERSION_MARKERS = {
+    "live": re.compile(r"(?<!\w)live(?!\w)", re.IGNORECASE),
+    "remix": re.compile(r"(?<!\w)remix(?:ed)?(?!\w)", re.IGNORECASE),
+    "cover": re.compile(r"(?<!\w)cover(?!\w)", re.IGNORECASE),
+    "acoustic": re.compile(r"(?<!\w)acoustic(?!\w)", re.IGNORECASE),
+    "instrumental": re.compile(r"(?<!\w)instrumental(?!\w)", re.IGNORECASE),
+    "radio": re.compile(r"(?<!\w)radio\s+edit(?!\w)", re.IGNORECASE),
+    "remaster": re.compile(r"(?<!\w)remaster(?:ed)?(?!\w)", re.IGNORECASE),
+}
 
 
 class QobuzServiceError(RuntimeError):
@@ -76,26 +51,17 @@ class QobuzServiceError(RuntimeError):
 
 
 class QobuzConfigurationError(QobuzServiceError):
-    """Qobuz is disabled, credentials are missing, or the package is absent."""
+    """The isolated sidecar is disabled or cannot be configured."""
 
 
-# QobuzAuthError и QobuzConfigurationError завершают задание БЕЗ retry
-# (см. qobuz_download_task): повторная попытка с теми же неверными
-# креденшелами бессмысленна и лишь рискует вызвать временный бан аккаунта.
 class QobuzAuthError(QobuzServiceError):
-    """Qobuz rejected the configured account credentials."""
+    """Qobuz rejected the provider credential held by the sidecar."""
 
 
-# Всё остальное (сеть, протухший bundle, нестримабельный контент) —
-# QobuzProviderError: такие сбои потенциально временные, поэтому задание
-# уходит в стандартный retry-паттерн Celery-задач.
 class QobuzProviderError(QobuzServiceError):
-    """Qobuz could not complete a remote operation."""
+    """Qobuz or the isolated sidecar could not complete an operation."""
 
 
-# Унифицированная карточка результата поиска по каталогу Qobuz (трек или
-# альбом). url собираем сами в каноническом виде play.qobuz.com/<type>/<id> —
-# его фронтенд показывает пользователю и принимает обратно в download-url.
 @dataclass(frozen=True, slots=True)
 class QobuzSearchCandidate:
     qobuz_id: str
@@ -106,278 +72,125 @@ class QobuzSearchCandidate:
     isrc: str | None
     hires: bool
     url: str
+    version: str = ""
+    maximum_bit_depth: int | None = None
+    maximum_sampling_rate: int | None = None
 
-
-# Признак «интеграция настроена»: флаг включён И задан хотя бы один способ
-# авторизации — либо токен браузерной сессии (основной путь, addendum
-# assessment §8), либо пара email+password (fallback на случай, если Qobuz
-# снова починит классический user/login).
-def is_qobuz_configured(config: Any = settings) -> bool:
-    if not config.qobuz_enabled:
-        return False
-    if str(getattr(config, "qobuz_auth_token", "") or "").strip():
-        return True
-    return bool(
-        str(config.qobuz_email or "").strip() and config.qobuz_password
-    )
-
-
-def _qobuz_modules() -> SimpleNamespace:
-    """Import qobuz-dl lazily; the app must boot without the package."""
-
-    # Ленивый импорт: qobuz-dl — опциональная зависимость (assessment §1:
-    # используется только как библиотека). При отсутствии пакета приложение и
-    # весь тестовый набор обязаны подниматься, а понятная ошибка должна
-    # появляться только при реальной попытке обратиться к Qobuz.
-    try:
-        from qobuz_dl import bundle as bundle_module
-        from qobuz_dl import downloader as downloader_module
-        from qobuz_dl import qopy as qopy_module
-        from qobuz_dl.exceptions import (
-            AuthenticationError,
-            IneligibleError,
-            InvalidAppIdError,
-            InvalidAppSecretError,
-            InvalidQuality,
-            NonStreamable,
-        )
-        from qobuz_dl.utils import get_url_info
-    except ImportError as exc:
-        raise QobuzConfigurationError(
-            "The qobuz-dl package is not installed in this environment"
-        ) from exc
-    return SimpleNamespace(
-        bundle=bundle_module,
-        downloader=downloader_module,
-        qopy=qopy_module,
-        get_url_info=get_url_info,
-        AuthenticationError=AuthenticationError,
-        IneligibleError=IneligibleError,
-        InvalidAppIdError=InvalidAppIdError,
-        InvalidAppSecretError=InvalidAppSecretError,
-        InvalidQuality=InvalidQuality,
-        NonStreamable=NonStreamable,
-    )
-
-
-def _load_cached_bundle() -> tuple[str, list[str]] | None:
-    """Read app_id/secrets from Redis; cache failures are non-fatal."""
-
-    # Кэш bundle (app_id + secrets веб-плеера) в Redis — митигация хрупкого
-    # извлечения из JS-бандла (assessment §3.2). Redis недоступен? Работаем
-    # без кэша: любая ошибка Redis глотается, bundle просто будет вытянут
-    # заново. Паттерн доступа к Redis повторяет services/spotify.py.
-    try:
-        from redis import Redis
-
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        raw = client.get(_BUNDLE_CACHE_KEY)
-    except Exception:
-        return None
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-        app_id = str(data["app_id"])
-        secrets = [str(secret) for secret in data["secrets"]]
-    except (KeyError, TypeError, ValueError):
-        return None
-    if not app_id or not secrets:
-        return None
-    return app_id, secrets
-
-
-def _store_bundle_cache(app_id: str, secrets: Iterable[str]) -> None:
-    try:
-        from redis import Redis
-
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        client.set(
-            _BUNDLE_CACHE_KEY,
-            json.dumps({"app_id": app_id, "secrets": list(secrets)}),
-            ex=_BUNDLE_CACHE_TTL_SECONDS,
-        )
-    except Exception:
-        pass
-
-
-def _drop_bundle_cache() -> None:
-    try:
-        from redis import Redis
-
-        client = Redis.from_url(settings.redis_url, decode_responses=True)
-        client.delete(_BUNDLE_CACHE_KEY)
-    except Exception:
-        pass
-
-
-def _fetch_bundle() -> tuple[str, list[str]]:
-    modules = _qobuz_modules()
-    try:
-        # Bundle() качает login-страницу play.qobuz.com и её JS-бандл,
-        # извлекая appId и набор seed-секретов регулярками (assessment §3.2).
-        # Любой сбой (сеть, смена вёрстки) — это сбой провайдера, а не
-        # креденшелов, поэтому QobuzProviderError → задание уйдёт в retry.
-        bundle = modules.bundle.Bundle()
-        app_id = str(bundle.get_app_id())
-        secrets = [str(secret) for secret in bundle.get_secrets().values()]
-    except Exception as exc:
-        raise QobuzProviderError(
-            "Qobuz app bundle could not be extracted from play.qobuz.com"
-        ) from exc
-    if not app_id or not secrets:
-        raise QobuzProviderError("Qobuz app bundle extraction returned no secrets")
-    _store_bundle_cache(app_id, secrets)
-    return app_id, secrets
-
-
-def _get_bundle(*, force_refresh: bool = False) -> tuple[str, list[str]]:
-    # Сначала Redis-кэш; force_refresh=True используется второй попыткой
-    # create_qobuz_client после InvalidAppSecretError (протухший секрет в
-    # кэше — штатный сценарий ротации bundle на стороне Qobuz).
-    if not force_refresh:
-        cached = _load_cached_bundle()
-        if cached is not None:
-            return cached
-    return _fetch_bundle()
-
-
-def _fetch_user_label(client) -> str | None:
-    """Best-effort membership label via user/get; never fatal."""
-
-    # Тариф аккаунта (short_label, например "Studio") нужен только как
-    # человекочитаемое подтверждение подписки в ответе /connect. При token-
-    # авторизации qopy.Client.label не заполняется (нет вызова user/login),
-    # поэтому читаем user/get отдельно; QOBUZ_USER_ID берём из .env.
-    # Любая ошибка — не фатальна: клиент просто получит label "token".
-    user_id = str(settings.qobuz_user_id or "").strip()
-    if not user_id:
-        return None
-    try:
-        data = client.api_call("user/get", user_id=user_id)
+    @property
+    def quality_rank(self) -> tuple[int, int, int]:
         return (
-            data.get("credential", {})
-            .get("parameters", {})
-            .get("short_label")
+            int(self.maximum_bit_depth or 0),
+            int(self.maximum_sampling_rate or 0),
+            int(self.hires),
         )
-    except Exception:
-        return None
 
 
-def _build_token_client(modules, app_id: str, secrets: list[str]):
-    """Authenticate with a browser-session user_auth_token.
+class QobuzSidecarClient:
+    """Small authenticated client for the private sidecar control API."""
 
-    Qobuz moved web login to OAuth, so the classic user/login flow can reject
-    even valid email+password pairs. The play.qobuz.com session token is sent
-    as the X-User-Auth-Token header instead; cfg_setup still validates the
-    extracted app secrets via a signed track/getFileUrl probe.
-    """
+    def __init__(self, base_url: str, internal_token: str):
+        self.base_url = base_url.rstrip("/")
+        self.internal_token = internal_token
+        self.label: str | None = None
 
-    # Workaround из addendum (assessment §8): Qobuz перевёл веб-вход на OAuth,
-    # и user/login стабильно отвечает 401 даже с верной парой email+пароль.
-    # Поэтому собираем qopy.Client вручную через __new__, МИНУЯ его __init__
-    # (там auth() → user/login). Токен сессии владелец извлекает из Local
-    # Storage браузера (ключ localuser) и кладёт в .env; токен — секрет того
-    # же класса, что пароль: не логируем и не включаем в исключения.
-    import requests
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        read_timeout: float | None = None,
+    ) -> dict[str, Any]:
+        timeout = httpx.Timeout(
+            connect=settings.qobuz_sidecar_connect_timeout_seconds,
+            read=read_timeout or settings.qobuz_sidecar_read_timeout_seconds,
+            write=30.0,
+            pool=5.0,
+        )
+        try:
+            response = httpx.request(
+                method,
+                f"{self.base_url}{path}",
+                headers={"Authorization": f"Bearer {self.internal_token}"},
+                json=payload,
+                timeout=timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise QobuzProviderError("The isolated Qobuz sidecar timed out") from exc
+        except httpx.HTTPError as exc:
+            raise QobuzProviderError("The isolated Qobuz sidecar is unavailable") from exc
+        if response.status_code in (400, 401):
+            raise QobuzAuthError("Qobuz rejected the configured credential")
+        if response.status_code == 503:
+            raise QobuzConfigurationError("The isolated Qobuz sidecar is not configured")
+        if response.status_code >= 400:
+            raise QobuzProviderError(
+                f"The isolated Qobuz sidecar failed with HTTP {response.status_code}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise QobuzProviderError("The isolated Qobuz sidecar returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            raise QobuzProviderError("The isolated Qobuz sidecar returned an invalid payload")
+        return data
 
-    token = settings.qobuz_auth_token.strip()
-    client = modules.qopy.Client.__new__(modules.qopy.Client)
-    client.secrets = secrets
-    client.id = str(app_id)
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0",
-            "X-App-Id": str(app_id),
-            "Content-Type": "application/json;charset=UTF-8",
-            "X-User-Auth-Token": token,
-        }
+    def status(self) -> dict[str, Any]:
+        return self._request("GET", "/status")
+
+    def connect(self) -> dict[str, Any]:
+        result = self._request("POST", "/connect", payload={})
+        self.label = str(result.get("label") or "") or None
+        return result
+
+    def search_tracks(self, query: str, limit: int) -> dict[str, Any]:
+        return self._request(
+            "POST", "/search", payload={"query": query, "kind": "track", "limit": limit}
+        ).get("result", {})
+
+    def search_albums(self, query: str, limit: int) -> dict[str, Any]:
+        return self._request(
+            "POST", "/search", payload={"query": query, "kind": "album", "limit": limit}
+        ).get("result", {})
+
+    def download_track(self, track_id: str, quality: int, embed_art: bool) -> list[str]:
+        data = self._request(
+            "POST",
+            "/download/track",
+            payload={"track_id": track_id, "quality": quality, "embed_art": embed_art},
+        )
+        files = data.get("files")
+        return [str(path) for path in files] if isinstance(files, list) else []
+
+    def download_url(self, url: str, quality: int, embed_art: bool) -> list[str]:
+        data = self._request(
+            "POST",
+            "/download/url",
+            payload={"url": url, "quality": quality, "embed_art": embed_art},
+        )
+        files = data.get("files")
+        return [str(path) for path in files] if isinstance(files, list) else []
+
+
+def is_qobuz_configured(config: Any = settings) -> bool:
+    return bool(
+        config.qobuz_enabled
+        and str(config.qobuz_sidecar_url or "").strip()
+        and len(str(config.qobuz_internal_token or "").strip()) >= 32
     )
-    client.session = session
-    client.base = "https://www.qobuz.com/api.json/0.2/"
-    client.sec = None
-    client.uat = token
-    client.label = None
-    try:
-        # cfg_setup() перебирает извлечённые из bundle секреты и проверяет
-        # каждый подписанным запросом track/getFileUrl — заодно это живой
-        # тест того, что и app_id/secrets, и токен сессии рабочие.
-        client.cfg_setup()
-    except modules.InvalidAppSecretError:
-        # Секреты bundle протухли → create_qobuz_client сбросит кэш и
-        # перевытянет bundle один раз.
-        raise
-    except requests.exceptions.HTTPError as exc:
-        # 4xx от API при валидных секретах = токен протух/отозван
-        # (assessment §8: восстановление — повторное извлечение из браузера).
-        # В сообщении — только инструкция, сам токен не включаем.
-        raise QobuzAuthError(
-            "Qobuz rejected the session token; re-extract QOBUZ_AUTH_TOKEN from the browser"
-        ) from exc
-    except requests.exceptions.RequestException as exc:
-        raise QobuzProviderError("Qobuz is unavailable") from exc
-    label = _fetch_user_label(client)
-    client.label = label or "token"
-    return client
 
 
-def create_qobuz_client():
-    """Build an authenticated qopy.Client from env settings only.
-
-    Token auth (QOBUZ_AUTH_TOKEN) is preferred; the email+password fallback
-    sends the password exclusively as an MD5 hex digest, exactly like the
-    upstream CLI does before initializing qopy.Client.
-    """
-
-    modules = _qobuz_modules()
+def create_qobuz_client() -> QobuzSidecarClient:
     if not is_qobuz_configured():
         raise QobuzConfigurationError(
-            "QOBUZ_ENABLED plus QOBUZ_AUTH_TOKEN (or QOBUZ_EMAIL and "
-            "QOBUZ_PASSWORD) must be configured"
+            "QOBUZ_ENABLED, QOBUZ_SIDECAR_URL and QOBUZ_INTERNAL_TOKEN are required"
         )
-    # Приоритет — токен браузерной сессии (OAuth-workaround, assessment §8).
-    # MD5 пароля вычисляем только если токена нет: лишний раз не трогаем
-    # секрет, который не понадобится.
-    use_token = bool(str(settings.qobuz_auth_token or "").strip())
-    password_md5 = (
-        None
-        if use_token
-        else hashlib.md5(settings.qobuz_password.encode("utf-8")).hexdigest()
+    client = QobuzSidecarClient(
+        settings.qobuz_sidecar_url,
+        settings.qobuz_internal_token,
     )
-    # Две попытки: первая может упасть на InvalidAppSecretError из-за
-    # протухшего кэша bundle — тогда сбрасываем кэш и повторяем с свежим.
-    # Пароль наружу уходит только как MD5-хеш по HTTPS (assessment §3.1,
-    # §5: открытый пароль за пределы процесса не передаётся).
-    for attempt in range(2):
-        app_id, secrets = _get_bundle(force_refresh=attempt == 1)
-        try:
-            if use_token:
-                return _build_token_client(modules, app_id, secrets)
-            return modules.qopy.Client(
-                settings.qobuz_email.strip(),
-                password_md5,
-                app_id,
-                secrets,
-            )
-        except modules.InvalidAppSecretError as exc:
-            if attempt == 0:
-                _drop_bundle_cache()
-                continue
-            raise QobuzProviderError(
-                "Qobuz app secret is invalid even after a bundle refresh"
-            ) from exc
-        except (modules.AuthenticationError, modules.IneligibleError) as exc:
-            raise QobuzAuthError(
-                "Qobuz rejected the configured credentials"
-            ) from exc
-        except modules.InvalidAppIdError as exc:
-            raise QobuzAuthError("Qobuz rejected the extracted app id") from exc
-        except QobuzServiceError:
-            raise
-        except Exception as exc:
-            raise QobuzProviderError("Qobuz client initialization failed") from exc
-    raise QobuzProviderError("Qobuz client initialization failed")
+    client.connect()
+    return client
 
 
 def _positive_int(value: Any) -> int | None:
@@ -386,16 +199,6 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
-
-
-# --- Маппинг ответов поиска Qobuz в унифицированные карточки ----------------
-#
-# qopy.Client.search_tracks/search_albums возвращают сырой JSON Qobuz API
-# вида {"tracks"|"albums": {"items": [...]}}. Здесь он приводится к
-# QobuzSearchCandidate: у трека исполнитель лежит в performer.name, длительность
-# — в секундах (переводим в мс, как везде в проекте), признак Hi-Res — в
-# hires_streamable. Кривые/неполные элементы молча пропускаем: поиск — это
-# best-effort витрина, а не повод падать.
 
 
 def _track_candidate(raw: Any) -> QobuzSearchCandidate | None:
@@ -414,9 +217,12 @@ def _track_candidate(raw: Any) -> QobuzSearchCandidate | None:
         title=title,
         album=str(album.get("title") or "").strip(),
         duration_ms=duration_seconds * 1000 if duration_seconds else None,
-        isrc=str(raw.get("isrc") or "").strip() or None,
+        isrc=normalize_isrc(str(raw.get("isrc") or "")),
         hires=bool(raw.get("hires_streamable")),
         url=f"https://play.qobuz.com/track/{qobuz_id}",
+        version=str(raw.get("version") or "").strip(),
+        maximum_bit_depth=_positive_int(raw.get("maximum_bit_depth")),
+        maximum_sampling_rate=_positive_int(raw.get("maximum_sampling_rate")),
     )
 
 
@@ -438,25 +244,20 @@ def _album_candidate(raw: Any) -> QobuzSearchCandidate | None:
         isrc=None,
         hires=bool(raw.get("hires_streamable")),
         url=f"https://play.qobuz.com/album/{qobuz_id}",
+        maximum_bit_depth=_positive_int(raw.get("maximum_bit_depth")),
+        maximum_sampling_rate=_positive_int(raw.get("maximum_sampling_rate")),
     )
 
 
 def _search_items(response: Any, key: str) -> list[Any]:
-    if not isinstance(response, dict):
+    if not isinstance(response, dict) or not isinstance(response.get(key), dict):
         return []
-    container = response.get(key)
-    if not isinstance(container, dict):
-        return []
-    items = container.get("items")
+    items = response[key].get("items")
     return items if isinstance(items, list) else []
 
 
 def search_tracks(client: Any, query: str, limit: int) -> list[QobuzSearchCandidate]:
     try:
-        # Любой сбой вызова (сеть, 5xx, протухшая сессия в виде 4xx) —
-        # сбой провайдера, а не приложения: маппим в QobuzProviderError,
-        # текст ответа API в сообщение не включаем (там могут быть
-        # чувствительные поля).
         response = client.search_tracks(query, limit)
     except QobuzServiceError:
         raise
@@ -483,68 +284,145 @@ def search_albums(client: Any, query: str, limit: int) -> list[QobuzSearchCandid
     ]
 
 
+def _version_markers(*values: str | None) -> frozenset[str]:
+    text = " ".join(unicodedata.normalize("NFKC", value or "") for value in values)
+    return frozenset(
+        marker for marker, pattern in _VERSION_MARKERS.items() if pattern.search(text)
+    )
+
+
+def _duration_within(left: int | None, right: int | None, tolerance: int) -> bool:
+    return left is None or right is None or abs(left - right) <= tolerance
+
+
+def choose_track_candidate(
+    *,
+    artist_raw: str | None,
+    title_raw: str | None,
+    album_raw: str | None,
+    isrc: str | None,
+    duration_ms: int | None,
+    candidates: Iterable[QobuzSearchCandidate],
+) -> tuple[QobuzSearchCandidate | None, str]:
+    """Choose only a deterministic recording; ambiguous candidates stay missing."""
+
+    candidates = list(candidates)
+    item_isrc = normalize_isrc(isrc)
+    if item_isrc:
+        # ISRC identifies the recording and therefore takes precedence over
+        # title/album edition labels.  Duplicate catalogue entries for the
+        # same ISRC are resolved only by the best published quality.
+        isrc_matches = [candidate for candidate in candidates if candidate.isrc == item_isrc]
+        if isrc_matches:
+            return max(isrc_matches, key=lambda candidate: candidate.quality_rank), "isrc"
+
+    item_markers = _version_markers(title_raw, album_raw)
+    compatible = [
+        candidate
+        for candidate in candidates
+        if item_markers
+        == _version_markers(candidate.title, candidate.version, candidate.album)
+    ]
+
+    item_artist = normalize_artist(artist_raw)
+    item_title = normalize_title(title_raw)
+    item_album = normalize_album(album_raw)
+    exact = [
+        candidate
+        for candidate in compatible
+        if normalize_artist(candidate.artist) == item_artist
+        and normalize_title(f"{candidate.title} {candidate.version}".strip()) == item_title
+        and _duration_within(
+            duration_ms, candidate.duration_ms, _EXACT_DURATION_TOLERANCE_MS
+        )
+    ]
+    if exact:
+        album_exact = [
+            candidate
+            for candidate in exact
+            if item_album and normalize_album(candidate.album) == item_album
+        ]
+        if album_exact:
+            exact = album_exact
+        identities = {
+            ("isrc", candidate.isrc)
+            if candidate.isrc
+            else ("qobuz_id", candidate.qobuz_id)
+            for candidate in exact
+        }
+        if len(identities) > 1:
+            return None, "ambiguous"
+        exact.sort(
+            key=lambda candidate: candidate.quality_rank,
+            reverse=True,
+        )
+        return exact[0], "exact"
+
+    if not item_artist or not item_title or duration_ms is None:
+        return None, "insufficient_metadata"
+
+    ranked: list[tuple[float, QobuzSearchCandidate]] = []
+    for candidate in compatible:
+        if candidate.duration_ms is None or not _duration_within(
+            duration_ms, candidate.duration_ms, _FUZZY_DURATION_TOLERANCE_MS
+        ):
+            continue
+        artist_score = float(token_set_ratio(item_artist, normalize_artist(candidate.artist)))
+        title_score = float(
+            token_set_ratio(
+                item_title,
+                normalize_title(f"{candidate.title} {candidate.version}".strip()),
+            )
+        )
+        combined = float(
+            token_set_ratio(
+                f"{item_artist} {item_title}",
+                f"{normalize_artist(candidate.artist)} "
+                f"{normalize_title(f'{candidate.title} {candidate.version}'.strip())}",
+            )
+        )
+        score = min(combined, (artist_score * 0.4) + (title_score * 0.6))
+        if (
+            score >= _FUZZY_AUTO_THRESHOLD
+            and artist_score >= _FUZZY_COMPONENT_THRESHOLD
+            and title_score >= _FUZZY_COMPONENT_THRESHOLD
+        ):
+            ranked.append((score, candidate))
+    ranked.sort(key=lambda item: (item[0], item[1].quality_rank), reverse=True)
+    if not ranked:
+        return None, "not_found"
+    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < _FUZZY_AMBIGUITY_GAP:
+        top, runner_up = ranked[0][1], ranked[1][1]
+        same_recording = (
+            bool(top.isrc)
+            and top.isrc == runner_up.isrc
+        ) or top.qobuz_id == runner_up.qobuz_id
+        if not same_recording:
+            return None, "ambiguous"
+    return ranked[0][1], "fuzzy"
+
+
 def select_best_track_candidate(
     *,
     artist_raw: str | None,
     title_raw: str | None,
     duration_ms: int | None,
     candidates: Iterable[QobuzSearchCandidate],
+    album_raw: str | None = None,
+    isrc: str | None = None,
 ) -> QobuzSearchCandidate | None:
-    """Pick the best fuzzy match like the library matcher does (85 / ±5 s)."""
-
-    # Выбор лучшего кандидата из поисковой выдачи Qobuz. Логика сознательно
-    # повторяет fuzzy-каскад services/matcher.py: rapidfuzz token_set_ratio по
-    # связке "artist title", порог 85, допуск по длительности ±5 с (допуск
-    # применяется, только когда обе длительности известны — иначе не
-    # отсекаем потенциально верный вариант). Докачиваем только уверенное
-    # совпадение: лучше оставить трек MISSING, чем скачать чужую запись.
-    item_key = f"{artist_raw or ''} {title_raw or ''}".strip()
-    if not item_key:
-        return None
-    best: QobuzSearchCandidate | None = None
-    best_score = 0.0
-    for candidate in candidates:
-        if (
-            duration_ms is not None
-            and candidate.duration_ms is not None
-            and abs(duration_ms - candidate.duration_ms) > _DURATION_TOLERANCE_MS
-        ):
-            continue
-        score = float(
-            token_set_ratio(item_key, f"{candidate.artist} {candidate.title}")
-        )
-        if score < _SEARCH_THRESHOLD or score <= best_score:
-            continue
-        best = candidate
-        best_score = score
-    return best
-
-
-def _staging_snapshot(staging: Path) -> set[Path]:
-    # Снапшот файлов staging ДО скачивания. downloader.Download молча глотает
-    # часть ошибок (assessment §3.3, дефект 3: ошибки тегирования пишутся в
-    # лог, а не в исключение), поэтому факт результата определяем не по
-    # возврату функции, а по разности снапшотов «после − до».
-    if not staging.exists():
-        return set()
-    return {
-        path.resolve()
-        for path in staging.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    }
+    candidate, _reason = choose_track_candidate(
+        artist_raw=artist_raw,
+        title_raw=title_raw,
+        album_raw=album_raw,
+        isrc=isrc,
+        duration_ms=duration_ms,
+        candidates=candidates,
+    )
+    return candidate
 
 
 def verify_staging_files(files: Iterable[Path]) -> tuple[list[Path], list[dict]]:
-    """Keep only parseable audio; everything else stays for the report."""
-
-    # Верификация перед переносом в библиотеку (assessment §3.5 и §5: защита
-    # от битых/подменённых файлов). Критерии приёмки КАЖДОГО файла:
-    #   1. расширение в allowlist (.flac/.mp3 — cover.jpg, booklet.pdf и
-    #      прочие не-аудио артефакты downloader'а отбраковываются здесь);
-    #   2. файл существует и размер > 0;
-    #   3. mutagen.File реально парсит контейнер;
-    #   4. info.length > 0 — в файле есть звуковая дорожка, а не мусор.
-    # Отбракованное остаётся в staging и попадает в отчёт rejected.
     verified: list[Path] = []
     rejected: list[dict] = []
     for file in files:
@@ -571,30 +449,16 @@ def verify_staging_files(files: Iterable[Path]) -> tuple[list[Path], list[dict]]
     return verified, rejected
 
 
-def _new_verified_files(staging: Path, before: set[Path]) -> tuple[list[Path], list[dict]]:
-    new_files = sorted(_staging_snapshot(staging) - before)
-    return verify_staging_files(new_files)
-
-
-def _map_download_error(modules: SimpleNamespace, exc: Exception) -> QobuzServiceError:
-    # Единая точка маппинга исключений qobuz-dl в наши типы. Важно для
-    # retry-политики задания: QobuzAuthError/QobuzConfigurationError падают
-    # БЕЗ retry (неверные креденшелы/качество повтором не лечатся),
-    # QobuzProviderError — временный сбой, уходит в retry.
-    # Тексты сообщений никогда не включают ответы API с секретами/токенами.
-    if isinstance(exc, QobuzServiceError):
-        return exc
-    if isinstance(exc, (modules.AuthenticationError, modules.IneligibleError)):
-        return QobuzAuthError("Qobuz rejected the configured credentials")
-    if isinstance(exc, modules.InvalidAppSecretError):
-        return QobuzProviderError("Qobuz app secret was rejected during download")
-    if isinstance(exc, modules.InvalidQuality):
-        return QobuzConfigurationError(
-            "QOBUZ_QUALITY must be one of 5, 6, 7 or 27"
-        )
-    if isinstance(exc, modules.NonStreamable):
-        return QobuzProviderError("Qobuz item is not streamable")
-    return QobuzProviderError("Qobuz download failed")
+def _sidecar_paths(relative_paths: Iterable[str], staging_dir: str | Path) -> list[Path]:
+    staging = Path(staging_dir).expanduser().resolve()
+    paths: list[Path] = []
+    for relative_path in relative_paths:
+        candidate = (staging / relative_path).resolve()
+        if not candidate.is_relative_to(staging):
+            raise QobuzProviderError("The Qobuz sidecar returned an unsafe staging path")
+        paths.append(candidate)
+    verified, _rejected = verify_staging_files(paths)
+    return verified
 
 
 def download_track_to_staging(
@@ -604,31 +468,13 @@ def download_track_to_staging(
     quality: int,
     embed_art: bool,
 ) -> list[Path]:
-    modules = _qobuz_modules()
-    staging = Path(staging_dir)
-    staging.mkdir(parents=True, exist_ok=True)
-    before = _staging_snapshot(staging)
     try:
-        # downloader.Download из qobuz-dl: скачивает во временный .tmp,
-        # тегирует mutagen и переименовывает в "Исполнитель - Альбом (год)
-        # [24B-96kHz]/NN. Title.flac" ВНУТРИ staging (assessment §3.3).
-        # downgrade_quality=True: если релиз недоступен в QOBUZ_QUALITY,
-        # докачиваем лучшее доступное качество вместо молчаливого пропуска —
-        # MISSING-трек лучше иметь в CD-качестве, чем не иметь вовсе.
-        modules.downloader.Download(
-            client,
-            str(track_id),
-            str(staging),
-            int(quality),
-            embed_art=embed_art,
-            downgrade_quality=True,
-        ).download_id_by_type(track=True)
+        relative_paths = client.download_track(str(track_id), int(quality), embed_art)
+    except QobuzServiceError:
+        raise
     except Exception as exc:
-        raise _map_download_error(modules, exc) from exc
-    # Возвращаем только НОВЫЕ и ПРОВЕРЕННЫЕ файлы (разность снапшотов +
-    # mutagen-верификация); отбракованное остаётся в staging для отчёта.
-    verified, _rejected = _new_verified_files(staging, before)
-    return verified
+        raise QobuzProviderError("Qobuz track download failed") from exc
+    return _sidecar_paths(relative_paths, staging_dir)
 
 
 def download_url_to_staging(
@@ -638,44 +484,16 @@ def download_url_to_staging(
     quality: int,
     embed_art: bool,
 ) -> list[Path]:
-    modules = _qobuz_modules()
-    # get_url_info из qobuz-dl парсит ссылки вида play.qobuz.com/<type>/<id>
-    # (а также open./www. и региональные префиксы). None — не ссылка Qobuz.
-    info = modules.get_url_info(str(url or ""))
-    if not info:
-        raise QobuzProviderError("URL is not a recognized Qobuz link")
-    kind, item_id = info
-    if kind not in _SUPPORTED_URL_TYPES:
-        # Ограничение MVP: только album и track. playlist/artist/label
-        # осознанно отклоняем понятной ошибкой (задокументировано в README),
-        # а не пытаемся качать тысячи треков одной ссылкой.
-        raise QobuzProviderError(
-            f"Qobuz '{kind}' URLs are not supported in the MVP; "
-            "only album and track URLs can be downloaded"
-        )
-    staging = Path(staging_dir)
-    staging.mkdir(parents=True, exist_ok=True)
-    before = _staging_snapshot(staging)
     try:
-        modules.downloader.Download(
-            client,
-            str(item_id),
-            str(staging),
-            int(quality),
-            embed_art=embed_art,
-            downgrade_quality=True,
-        ).download_id_by_type(track=kind == "track")
+        relative_paths = client.download_url(str(url), int(quality), embed_art)
+    except QobuzServiceError:
+        raise
     except Exception as exc:
-        raise _map_download_error(modules, exc) from exc
-    verified, _rejected = _new_verified_files(staging, before)
-    return verified
+        raise QobuzProviderError("Qobuz URL download failed") from exc
+    return _sidecar_paths(relative_paths, staging_dir)
 
 
 def _cleanup_empty_staging_dirs(staging: Path) -> None:
-    # После успешного переноса убираем опустевшие папки альбомов в staging,
-    # чтобы каталог не зарастал пустыми оболочками. Непустые (конфликты,
-    # cover.jpg, booklet.pdf, отбракованные файлы) rmdir не трогает — OSError
-    # просто игнорируется.
     if not staging.exists():
         return
     directories = sorted(
@@ -695,18 +513,6 @@ def import_files_to_library(
     staging_dir: str | Path,
     library_path: str | Path,
 ) -> dict:
-    """Move verified audio into the library without overwriting anything."""
-
-    # Перенос верифицированного аудио из staging в библиотеку (assessment
-    # §3.5: staging → верификация → перемещение). Правила безопасности:
-    #   1. относительная структура папок сохраняется (папка альбома, созданная
-    #      downloader'ом, воспроизводится в библиотеке);
-    #   2. containment-проверка, как в services/delivery.py: resolved-путь
-    #      назначения обязан остаться внутри MUSIC_LIBRARY_PATH — защита от
-    #      выхода за корень через «../» в именах;
-    #   3. существующие файлы НИКОГДА не перезаписываются: конфликт имён
-    #      остаётся лежать в staging и попадает в отчёт conflicts — повторная
-    #      докачка не затирает уже собранную коллекцию.
     staging_root = Path(staging_dir).expanduser().resolve()
     library_root = Path(library_path).expanduser().resolve()
     library_root.mkdir(parents=True, exist_ok=True)
@@ -738,12 +544,26 @@ def import_files_to_library(
     return report
 
 
-def _missing_items(db: Session, playlist: Playlist, limit: int) -> list[PlaylistItem]:
-    # Выбираем только иtems, у которых ЕСТЬ Match-запись со статусом MISSING:
-    # join с matches — намеренный фильтр. UNMATCHED-иtems (без Match-записи)
-    # не трогаем: они ещё не проходили матчинг, и качать их вслепую нельзя —
-    # вдруг трек уже есть в библиотеке, просто не сматчен. Ограничение
-    # QOBUZ_MAX_TRACKS_PER_RUN — анти-бан лимит за один запуск (assessment §5).
+def provider_lookup_key(item: PlaylistItem) -> str:
+    """Stable identity shared by equal playlist rows and future providers."""
+
+    isrc = normalize_isrc(item.isrc)
+    if isrc:
+        identity = ("isrc", isrc)
+    else:
+        identity = (
+            "metadata",
+            item.artist_norm or normalize_artist(item.artist_raw),
+            item.title_norm or normalize_title(item.title_raw),
+            item.album_norm or normalize_album(item.album_raw),
+            str(item.duration_ms or ""),
+        )
+    return hashlib.sha256("\x1f".join(identity).encode("utf-8")).hexdigest()
+
+
+def missing_provider_items(
+    db: Session, playlist: Playlist, provider: str
+) -> tuple[list[PlaylistItem], list[PlaylistItem]]:
     statement = (
         select(PlaylistItem)
         .join(Match, Match.playlist_item_id == PlaylistItem.id)
@@ -752,9 +572,129 @@ def _missing_items(db: Session, playlist: Playlist, limit: int) -> list[Playlist
             Match.status == MatchStatus.missing,
         )
         .order_by(PlaylistItem.position, PlaylistItem.id)
-        .limit(limit)
     )
-    return list(db.scalars(statement))
+    all_items = list(db.scalars(statement))
+    lookup_keys = {provider_lookup_key(item) for item in all_items}
+    attempted_keys = set()
+    if lookup_keys:
+        attempts = db.execute(
+            select(
+                ProviderAttempt.provider,
+                ProviderAttempt.lookup_key,
+                ProviderAttempt.status,
+            ).where(ProviderAttempt.lookup_key.in_(lookup_keys))
+        )
+        attempted_keys = {
+            lookup_key
+            for provider_name, lookup_key, status in attempts
+            if provider_name == provider or status in {"stored", "conflict"}
+        }
+    seen_keys = set(attempted_keys)
+    eligible: list[PlaylistItem] = []
+    for item in all_items:
+        lookup_key = provider_lookup_key(item)
+        if lookup_key in seen_keys:
+            continue
+        seen_keys.add(lookup_key)
+        eligible.append(item)
+    return all_items, eligible
+
+
+def qobuz_download_eligibility(db: Session, playlist: Playlist) -> dict[str, int]:
+    all_missing, eligible = missing_provider_items(db, playlist, "qobuz")
+    return {
+        "total_missing": len(all_missing),
+        "eligible": len(eligible),
+        "already_checked": len(all_missing) - len(eligible),
+    }
+
+
+def mark_downloads_stored(
+    downloads: dict,
+    import_report: dict,
+    staging_dir: str | Path,
+    library_path: str | Path,
+) -> None:
+    """Promote per-track download states after files move into the library."""
+
+    staging_root = Path(staging_dir).expanduser().resolve()
+    library_root = Path(library_path).expanduser().resolve()
+    imported = {
+        str(Path(path).expanduser().resolve()) for path in import_report["imported"]
+    }
+    conflicts = {
+        str(Path(entry["target"]).expanduser().resolve())
+        for entry in import_report["conflicts"]
+    }
+    stored = 0
+    conflicted = 0
+    import_failed = 0
+    for entry in downloads.get("items", []):
+        files = [Path(path).expanduser().resolve() for path in entry.pop("files", [])]
+        if files:
+            entry["file_count"] = len(files)
+        if entry.get("status") != "downloaded":
+            continue
+        targets: list[str] = []
+        try:
+            targets = [
+                str((library_root / source.relative_to(staging_root)).resolve())
+                for source in files
+            ]
+        except ValueError:
+            targets = []
+        if targets and all(target in imported for target in targets):
+            entry["status"] = "stored"
+            stored += 1
+        elif targets and any(target in conflicts for target in targets):
+            entry["status"] = "conflict"
+            conflicted += 1
+        else:
+            entry["status"] = "failed"
+            entry["error"] = "library import failed"
+            import_failed += 1
+    downloads["stored"] = stored
+    downloads["conflicts"] = conflicted
+    downloads["import_failed"] = import_failed
+
+
+def _record_qobuz_attempt(
+    db: Session,
+    item: PlaylistItem,
+    entry: dict,
+    job_id: int | None,
+) -> None:
+    lookup_key = provider_lookup_key(item)
+    attempt = db.scalar(
+        select(ProviderAttempt).where(
+            ProviderAttempt.provider == "qobuz",
+            ProviderAttempt.lookup_key == lookup_key,
+        )
+    )
+    if attempt is None:
+        attempt = ProviderAttempt(provider="qobuz", lookup_key=lookup_key)
+        db.add(attempt)
+    attempt.playlist_item_id = item.id
+    attempt.job_id = job_id
+    attempt.status = str(entry.get("status") or "failed")
+    attempt.provider_item_id = entry.get("qobuz_track_id")
+    attempt.selection_method = entry.get("selection")
+    attempt.error_code = entry.get("error")
+    db.flush()
+
+
+def record_qobuz_download_attempts(
+    db: Session,
+    downloads: dict,
+    playlist_items: dict[int, PlaylistItem],
+    job_id: int | None,
+) -> None:
+    """Persist final stored/conflict outcomes after the import phase."""
+
+    for entry in downloads.get("items", []):
+        item = playlist_items.get(int(entry["item_id"]))
+        if item is not None:
+            _record_qobuz_attempt(db, item, entry, job_id)
 
 
 def fetch_missing_tracks(
@@ -762,84 +702,114 @@ def fetch_missing_tracks(
     playlist: Playlist,
     client: Any,
     progress_callback: Callable[[dict], None] | None = None,
+    job_id: int | None = None,
 ) -> tuple[dict, list[Path]]:
-    """Download MISSING playlist items into the staging area, one by one."""
-
-    # Докачка MISSING-треков плейлиста из каталога Qobuz. Обработка строго
-    # последовательная (assessment §5: один активный job + задержка между
-    # скачиваниями — защита аккаунта от rate-limit/бана; §3.3, дефект 1:
-    # зависший download без timeout митигируется stale-таймаутом задания и
-    # heartbeat'ами, которые worker шлёт через progress_callback после
-    # каждого трека).
-    #
-    # Для каждого иtema: поиск "{artist_raw} {title_raw}" (top-5) →
-    # select_best_track_candidate (порог 85, ±5 с) → скачивание в staging.
-    # Ошибка одного трека не роняет весь прогон: фиксируется в items[].status
-    # (downloaded / not_found / failed) и счётчиках сводки.
-    max_tracks = settings.qobuz_max_tracks_per_run
-    items = _missing_items(db, playlist, max_tracks)
-    summary: dict[str, Any] = {
-        "playlist_id": playlist.id,
-        "total_missing": len(items),
-        "attempted": 0,
-        "downloaded": 0,
-        "not_found": 0,
-        "failed": 0,
-        "items": [],
-    }
-    collected: list[Path] = []
-    for item in items:
-        entry: dict[str, Any] = {
+    all_missing, items = missing_provider_items(db, playlist, "qobuz")
+    batch_size = settings.qobuz_max_tracks_per_run
+    batch_count = (len(items) + batch_size - 1) // batch_size
+    entries: list[dict[str, Any]] = [
+        {
             "item_id": item.id,
             "artist": item.artist_raw,
             "title": item.title_raw,
+            "status": "queued",
         }
-        query = f"{item.artist_raw or ''} {item.title_raw or ''}".strip()
-        try:
-            if not query:
-                raise QobuzProviderError("Playlist item has no artist/title query")
-            summary["attempted"] += 1
-            candidates = search_tracks(client, query, limit=5)
-            best = select_best_track_candidate(
-                artist_raw=item.artist_raw,
-                title_raw=item.title_raw,
-                duration_ms=item.duration_ms,
-                candidates=candidates,
-            )
-            if best is None:
-                summary["not_found"] += 1
-                entry["status"] = "not_found"
-            else:
-                entry["qobuz_track_id"] = best.qobuz_id
-                files = download_track_to_staging(
-                    client,
-                    best.qobuz_id,
-                    settings.qobuz_staging_path,
-                    settings.qobuz_quality,
-                    settings.qobuz_embed_art,
-                )
-                if files:
-                    collected.extend(files)
-                    summary["downloaded"] += 1
-                    entry["status"] = "downloaded"
-                else:
-                    # downloader отработал без исключений, но новых
-                    # проверенных аудиофайлов не появилось (демо-фрагмент,
-                    # нестримабельность, битый файл) — фиксируем failed,
-                    # битые артефакты остаются в staging для отчёта.
-                    summary["failed"] += 1
-                    entry["status"] = "failed"
-                    entry["error"] = "download produced no verified audio"
-            # Обязательная пауза между скачиваниями (assessment §5, §7 п. 4:
-            # лимиты и задержки против rate-limit/бана аккаунта Qobuz).
-            time.sleep(settings.qobuz_request_delay_seconds)
-        except QobuzServiceError as exc:
-            summary["failed"] += 1
-            entry["status"] = "failed"
-            entry["error"] = type(exc).__name__
-        summary["items"].append(entry)
+        for item in items
+    ]
+    summary: dict[str, Any] = {
+        "playlist_id": playlist.id,
+        "total_missing": len(all_missing),
+        "eligible_total": len(items),
+        "skipped_same_source": len(all_missing) - len(items),
+        "batch_size": batch_size,
+        "batch_count": batch_count,
+        "current_batch": 0,
+        "current_batch_size": 0,
+        "batch_processed": 0,
+        "batch_pause_seconds": 0,
+        "processed": 0,
+        "attempted": 0,
+        "downloaded": 0,
+        "not_found": 0,
+        "ambiguous": 0,
+        "failed": 0,
+        "items": entries,
+    }
+    collected: list[Path] = []
+    if progress_callback is not None:
+        progress_callback(summary)
+    for batch_index, batch_start in enumerate(range(0, len(items), batch_size)):
+        batch_items = items[batch_start : batch_start + batch_size]
+        batch_entries = entries[batch_start : batch_start + batch_size]
+        summary["current_batch"] = batch_index + 1
+        summary["current_batch_size"] = len(batch_items)
+        summary["batch_processed"] = 0
+        summary["batch_pause_seconds"] = 0
+        summary["batch_state"] = "running"
         if progress_callback is not None:
-            progress_callback(
-                {key: value for key, value in summary.items() if key != "items"}
-            )
+            progress_callback(summary)
+        for item, entry in zip(batch_items, batch_entries, strict=True):
+            entry["status"] = "searching"
+            if progress_callback is not None:
+                progress_callback(summary)
+            query = f"{item.artist_raw or ''} {item.title_raw or ''}".strip()
+            try:
+                if not query:
+                    raise QobuzProviderError("Playlist item has no artist/title query")
+                summary["attempted"] += 1
+                candidates = search_tracks(client, query, limit=10)
+                best, method = choose_track_candidate(
+                    artist_raw=item.artist_raw,
+                    title_raw=item.title_raw,
+                    album_raw=item.album_raw,
+                    isrc=item.isrc,
+                    duration_ms=item.duration_ms,
+                    candidates=candidates,
+                )
+                if best is None:
+                    status = "ambiguous" if method == "ambiguous" else "not_found"
+                    summary[status] += 1
+                    entry["status"] = status
+                    entry["selection"] = method
+                else:
+                    entry["qobuz_track_id"] = best.qobuz_id
+                    entry["selection"] = method
+                    entry["status"] = "downloading"
+                    if progress_callback is not None:
+                        progress_callback(summary)
+                    files = download_track_to_staging(
+                        client,
+                        best.qobuz_id,
+                        settings.qobuz_staging_path,
+                        settings.qobuz_quality,
+                        settings.qobuz_embed_art,
+                    )
+                    if files:
+                        collected.extend(files)
+                        summary["downloaded"] += 1
+                        entry["status"] = "downloaded"
+                        entry["files"] = [str(path) for path in files]
+                    else:
+                        summary["failed"] += 1
+                        entry["status"] = "failed"
+                        entry["error"] = "download produced no verified audio"
+            except QobuzServiceError as exc:
+                summary["failed"] += 1
+                entry["status"] = "failed"
+                entry["error"] = type(exc).__name__
+            if entry["status"] != "downloaded":
+                _record_qobuz_attempt(db, item, entry, job_id)
+            summary["processed"] += 1
+            summary["batch_processed"] += 1
+            if progress_callback is not None:
+                progress_callback(summary)
+            if settings.qobuz_request_delay_seconds:
+                time.sleep(settings.qobuz_request_delay_seconds)
+        if batch_index + 1 < batch_count:
+            summary["batch_state"] = "paused"
+            summary["batch_pause_seconds"] = settings.qobuz_batch_delay_seconds
+            if progress_callback is not None:
+                progress_callback(summary)
+            if settings.qobuz_batch_delay_seconds:
+                time.sleep(settings.qobuz_batch_delay_seconds)
     return summary, collected

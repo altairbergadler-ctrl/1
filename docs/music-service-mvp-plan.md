@@ -91,6 +91,8 @@ files(id, track_id, path, format, bit_depth, sample_rate,
 matches(id, playlist_item_id, track_id, confidence, method,
         status)            # READY | NEEDS_REVIEW | MISSING
 jobs(id, type, status, payload, error, created_at, finished_at)
+provider_attempts(id, provider, lookup_key, playlist_item_id, job_id, status,
+                  provider_item_id, selection_method, error_code, attempted_at)
 ```
 
 Индексы: `files(sha1)`, `tracks(isrc)`, `tracks(title_norm)`, `playlist_items(isrc)`, `matches(playlist_item_id)`.
@@ -256,27 +258,27 @@ Release 2. Она не включает реализацию API, миграци
 
 ### Security/legal gate: `qobuz-dl`
 
-Репозиторий-кандидат: <https://github.com/vitiko98/qobuz-dl>. Это сторонний
-CLI/Python-модуль, а не официальный Qobuz-плагин. До окончания аудита
-пакет не устанавливается, не запускается и не получает учётные данные.
+Репозиторий: <https://github.com/vitiko98/qobuz-dl>. Это сторонний
+CLI/Python-модуль, а не официальный Qobuz-плагин. Gate завершён решением
+**RESTRICT**; обязательные границы находятся в `docs/qobuz-dl-assessment.md`.
 
-- [ ] Зафиксировать конкретный commit/package hash, лицензию, активность
+- [x] Зафиксировать конкретный commit/package hash, лицензию, активность
   сопровождения, открытые security-issues и полное дерево зависимостей.
-- [ ] Провести code review авторизации, хранения email/password,
+- [x] Провести code review авторизации, хранения email/password,
   логирования, извлечения app secrets из web bundle, сетевых адресов,
   записи на диск и вызова внешних процессов.
-- [ ] Провести отдельный terms/rights review: описать доступные
+- [x] Провести отдельный terms/rights review: описать доступные
   режимы, применимые ограничения и подтверждающие их источники;
   границы будущего прототипа согласовать отдельно после аудита.
-- [ ] Только при успешном gate собрать изолированный прототип:
+- [x] Только при успешном gate собрать изолированный прототип:
   без доступа к `.env`, базе, Docker socket и `X:\Music`; с отдельной staging-
   папкой, allowlist сетевых адресов, лимитами объёма/частоты и
   проверкой контейнера, хеша и метаданных до импорта.
-- [ ] Не передавать основной Qobuz-пароль стороннему коду. До
+- [x] Не передавать основной Qobuz-пароль стороннему коду. До
   прототипа описать минимально привилегированный способ доступа,
   хранение, ротацию и отзыв секрета; при отсутствии такого способа
   отклонить интеграцию.
-- [ ] Создать `docs/qobuz-dl-assessment.md`: таблица рисков, SBOM/аудит
+- [x] Создать `docs/qobuz-dl-assessment.md`: таблица рисков, SBOM/аудит
   зависимостей, карта data flow, результаты sandbox-теста и явное
   решение `allow / restrict / reject`.
 

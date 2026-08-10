@@ -4,6 +4,8 @@ const toast = document.querySelector("#toast");
 const state = {
   authenticated: false,
   statusFilter: "ALL",
+  qobuzWatchToken: 0,
+  yandexWatchToken: 0,
 };
 
 const statusLabels = {
@@ -11,6 +13,34 @@ const statusLabels = {
   NEEDS_REVIEW: "Проверить",
   MISSING: "Нет в архиве",
   UNMATCHED: "Не обработан",
+};
+
+const qobuzDownloadLabels = {
+  queued: "В очереди",
+  searching: "Поиск в Qobuz",
+  downloading: "Скачивается",
+  downloaded: "Скачан",
+  stored: "В хранилище",
+  conflict: "Уже существует",
+  not_found: "Не найден в Qobuz",
+  ambiguous: "Нужно выбрать версию",
+  failed: "Ошибка загрузки",
+};
+
+const qobuzPhaseLabels = {
+  queued: "Задание поставлено в очередь",
+  downloading: "Поиск и загрузка треков",
+  batch_pause: "Пауза перед следующей пачкой",
+  importing: "Перенос файлов в хранилище",
+  scanning: "Обновление каталога",
+  matching: "Сопоставление с плейлистом",
+  completed: "Загрузка завершена",
+};
+
+const yandexDownloadLabels = {
+  ...qobuzDownloadLabels,
+  searching: "Поиск в Яндекс Музыке",
+  not_found: "Не найден в Яндекс Музыке",
 };
 
 function escapeHtml(value) {
@@ -173,29 +203,23 @@ function playlistCard(playlist) {
   `;
 }
 
-// Карточка источника Qobuz на странице плейлистов. Показывает состояние
-// интеграции по GET /api/qobuz/status: выключена (enabled=false → серое
-// «не настроен»), включена без креденшелов, либо готова к проверке логина.
-// Кнопка «Подключить» доступна только когда сервис включён и креденшелы
-// заданы в .env — сама проверка идёт через POST /api/qobuz/connect.
+// Qobuz настраивается на сервере и остаётся включённым всё время работы стека.
+// Ручной шаг подключения в PWA не нужен: fetch/search сами проверяют sidecar и
+// credential при каждом задании, а GET /status показывает готовность контура.
 function qobuzSourceCard(status) {
   const stateText = !status
     ? "статус недоступен"
     : !status.enabled
       ? "не настроен"
       : status.configured
-        ? "готов к подключению"
-        : "включён, но без QOBUZ_EMAIL/QOBUZ_PASSWORD";
-  const button = status?.enabled && status?.configured
-    ? `<button class="ghost small" type="button" data-action="qobuz-connect">Подключить</button>`
-    : "";
+        ? "включён постоянно"
+        : "sidecar включён, но provider credential не настроен";
   return `
     <section class="card qobuz-source">
       <div class="summary-line">
         <span><span class="source-badge">qobuz</span> Докачка missing-треков</span>
         <span class="muted" id="qobuz-status">${escapeHtml(stateText)}</span>
       </div>
-      <div class="action-row" style="margin-top: 12px">${button}</div>
     </section>
   `;
 }
@@ -203,11 +227,12 @@ function qobuzSourceCard(status) {
 async function renderPlaylists() {
   loadingPage("Плейлисты в вашем архиве");
   try {
-    const [data, qobuzStatus] = await Promise.all([
+    const [data, qobuzStatus, yandexStatus] = await Promise.all([
       api("/api/playlists?limit=200"),
       // Статус Qobuz подтягиваем мягко: если роутер недоступен, карточка
       // просто покажет «статус недоступен», а список плейлистов не пострадает.
       api("/api/qobuz/status").catch(() => null),
+      api("/api/yandex-download/status").catch(() => null),
     ]);
     app.innerHTML = shell(`
       <main>
@@ -223,6 +248,7 @@ async function renderPlaylists() {
           </div>
         </section>
         ${qobuzSourceCard(qobuzStatus)}
+        ${yandexStatus?.enabled ? yandexSourceCard(yandexStatus) : ""}
         ${data.items.length ? `<section class="playlist-grid">${data.items.map(playlistCard).join("")}</section>` : `
           <section class="empty-state">
             <h2>Плейлистов пока нет</h2>
@@ -251,20 +277,142 @@ function statusClass(status) {
   return status.toLowerCase();
 }
 
-function trackRow(item) {
+function qobuzJobDownloads(job) {
+  return job?.payload?.downloads || {};
+}
+
+function qobuzItemMap(job) {
+  return new Map(
+    (qobuzJobDownloads(job).items || []).map((item) => [Number(item.item_id), item]),
+  );
+}
+
+function yandexItemMap(job) {
+  return new Map(
+    (qobuzJobDownloads(job).items || []).map((item) => [Number(item.item_id), item]),
+  );
+}
+
+function qobuzTrackBadge(entry) {
+  if (!entry?.status) return "";
+  const label = qobuzDownloadLabels[entry.status] || entry.status;
+  return `<span class="status-badge qobuz-download ${escapeHtml(entry.status)}" data-qobuz-item-status>${escapeHtml(label)}</span>`;
+}
+
+function yandexTrackBadge(entry) {
+  if (!entry?.status) return "";
+  const label = entry.status === "failed" && entry.error_detail
+    ? `Ошибка: ${entry.error_detail}`
+    : yandexDownloadLabels[entry.status] || entry.status;
+  const quality = entry.codec && entry.bitrate_kbps
+    ? ` · ${String(entry.codec).toUpperCase()} ${entry.bitrate_kbps} kbps`
+    : "";
+  return `<span class="status-badge qobuz-download ${escapeHtml(entry.status)}" data-yandex-item-status>${escapeHtml(label + quality)}</span>`;
+}
+
+function qobuzProgressPanel(job) {
+  if (!job || job.payload?.mode !== "fetch_missing") return "";
+  const payload = job.payload || {};
+  const downloads = qobuzJobDownloads(job);
+  const batchTotal = Number(downloads.eligible_total ?? downloads.batch_total ?? downloads.total_missing ?? 0);
+  const processed = Number(downloads.processed ?? downloads.attempted ?? 0);
+  const percent = batchTotal > 0 ? Math.min(100, Math.round((processed / batchTotal) * 100)) : 0;
+  const phase = payload.phase || (job.status === "pending" ? "queued" : job.status);
+  const phaseLabel = job.status === "failed"
+    ? "Загрузка остановлена"
+    : (qobuzPhaseLabels[phase] || "Обработка загрузки");
+  const stateLabel = job.status === "done"
+    ? "завершено"
+    : job.status === "failed"
+      ? "ошибка"
+      : "выполняется";
+  const totalMissing = Number(downloads.total_missing ?? batchTotal);
+  const batchCount = Number(downloads.batch_count ?? (batchTotal ? 1 : 0));
+  const currentBatch = Number(downloads.current_batch ?? (batchCount ? 1 : 0));
+  const currentBatchSize = Number(downloads.current_batch_size ?? batchTotal);
+  const batchProcessed = Number(downloads.batch_processed ?? processed);
+  const alreadyChecked = Number(downloads.skipped_same_source ?? 0);
+  const batchLabel = batchCount > 1
+    ? `Пачка ${currentBatch} из ${batchCount} · ${batchProcessed} / ${currentBatchSize}`
+    : `${processed} / ${batchTotal} треков`;
+  const scopeLabel = alreadyChecked > 0
+    ? `${batchTotal} новых проверок · ${alreadyChecked} уже проверено в Qobuz`
+    : `${batchTotal} новых проверок из ${totalMissing} отсутствующих треков`;
+  return `
+    <section class="qobuz-progress-card ${escapeHtml(job.status)}" id="qobuz-download-progress" aria-live="polite">
+      <div class="qobuz-progress-heading">
+        <div>
+          <p class="eyebrow">QOBUZ · JOB #${job.id}</p>
+          <h2>${escapeHtml(phaseLabel)}</h2>
+        </div>
+        <span class="status-badge qobuz-job-state ${escapeHtml(job.status)}">${escapeHtml(stateLabel)}</span>
+      </div>
+      <div class="progress" aria-label="Обработано ${processed} из ${batchTotal}">
+        <span style="width: ${percent}%"></span>
+      </div>
+      <div class="summary-line">
+        <span>${escapeHtml(scopeLabel)}</span>
+        <strong>${processed} / ${batchTotal}</strong>
+      </div>
+      <p class="qobuz-batch-line">${escapeHtml(batchLabel)}${downloads.batch_state === "paused" ? ` · пауза ${downloads.batch_pause_seconds ?? 0} сек.` : ""}</p>
+      <div class="qobuz-progress-stats">
+        <span><strong>${downloads.stored ?? downloads.downloaded ?? 0}</strong> в хранилище</span>
+        <span><strong>${downloads.not_found ?? 0}</strong> не найдено</span>
+        <span><strong>${downloads.ambiguous ?? 0}</strong> требуют выбора</span>
+        <span><strong>${(downloads.failed ?? 0) + (downloads.import_failed ?? 0)}</strong> ошибок</span>
+      </div>
+      ${job.error ? `<p class="qobuz-progress-error">${escapeHtml(job.error)}</p>` : ""}
+    </section>
+  `;
+}
+
+function yandexProgressPanel(job) {
+  if (!job) return "";
+  const compatibleJob = {
+    ...job,
+    payload: { ...(job.payload || {}), mode: "fetch_missing" },
+  };
+  return qobuzProgressPanel(compatibleJob)
+    .replaceAll("QOBUZ", "YANDEX")
+    .replaceAll("Qobuz", "Яндекс Музыке")
+    .replace('id="qobuz-download-progress"', 'id="yandex-download-progress"');
+}
+
+function yandexSourceCard(status) {
+  const stateText = !status
+    ? "статус недоступен"
+    : !status.enabled
+      ? "загрузка выключена"
+      : status.configured
+        ? "готов · FLAC предпочтительно, AAC/MP3 fallback"
+        : "подключите Яндекс Музыку как источник плейлистов";
+  return `
+    <section class="card qobuz-source">
+      <div class="summary-line">
+        <span><span class="source-badge">yandex</span> Дополнительный источник missing-треков</span>
+        <span class="muted" id="yandex-download-status">${escapeHtml(stateText)}</span>
+      </div>
+      <p class="muted" style="margin-top: 10px">Сначала FLAC. Если его нет, сохраняется лучший доступный AAC/MP3 без перекодирования.</p>
+    </section>
+  `;
+}
+
+function trackRow(item, qobuzItems = new Map(), yandexItems = new Map()) {
   const download = item.status === "READY"
     ? `<a class="button secondary small" href="/api/download/track/${item.id}" download>Скачать</a>`
     : item.status === "NEEDS_REVIEW"
       ? `<a class="button ghost small" href="#/review">Выбрать</a>`
       : "";
   return `
-    <article class="track-row" data-status="${escapeHtml(item.status)}">
+    <article class="track-row" data-status="${escapeHtml(item.status)}" data-item-id="${item.id}">
       <div class="track-position">${String(item.position + 1).padStart(2, "0")}</div>
       <div>
         <h3 class="track-title">${escapeHtml(item.title_raw || "Без названия")}</h3>
         <p class="track-meta">${escapeHtml(item.artist_raw || "Неизвестный исполнитель")} · ${escapeHtml(item.album_raw || "Альбом не указан")}</p>
       </div>
       <div class="track-actions action-row">
+        ${yandexTrackBadge(yandexItems.get(Number(item.id)))}
+        ${qobuzTrackBadge(qobuzItems.get(Number(item.id)))}
         <span class="status-badge ${statusClass(item.status)}">${statusLabels[item.status] || item.status}</span>
         ${download}
       </div>
@@ -273,12 +421,35 @@ function trackRow(item) {
 }
 
 async function renderPlaylist(playlistId) {
+  const qobuzWatchToken = ++state.qobuzWatchToken;
+  const yandexWatchToken = ++state.yandexWatchToken;
   loadingPage("Открываем плейлист");
   try {
-    const [playlist, items] = await Promise.all([
+    const [
+      playlist,
+      items,
+      qobuzStatus,
+      yandexStatus,
+      qobuzJob,
+      yandexJob,
+      qobuzEligibility,
+      yandexEligibility,
+    ] = await Promise.all([
       api(`/api/playlists/${playlistId}`),
       fetchAllItems(playlistId),
+      api("/api/qobuz/status").catch(() => null),
+      api("/api/yandex-download/status").catch(() => null),
+      api(`/api/qobuz/download-status/${playlistId}`).catch(() => null),
+      api(`/api/yandex-download/download-status/${playlistId}`).catch(() => null),
+      api(`/api/qobuz/download-eligibility/${playlistId}`).catch(() => null),
+      api(`/api/yandex-download/download-eligibility/${playlistId}`).catch(() => null),
     ]);
+    const qobuzItems = qobuzItemMap(qobuzJob);
+    const yandexItems = yandexItemMap(yandexJob);
+    const qobuzDownloadActive = ["pending", "running"].includes(qobuzJob?.status);
+    const yandexDownloadActive = ["pending", "running"].includes(yandexJob?.status);
+    const qobuzEligible = Number(qobuzEligibility?.eligible ?? playlist.summary.missing);
+    const yandexEligible = Number(yandexEligibility?.eligible ?? playlist.summary.missing);
     const statuses = ["ALL", "READY", "NEEDS_REVIEW", "MISSING", "UNMATCHED"];
     app.innerHTML = shell(`
       <main>
@@ -294,11 +465,14 @@ async function renderPlaylist(playlistId) {
                  MISSING-треки: POST /api/qobuz/fetch-missing поставит задание,
                  которое скачает недостающее в staging, перенесёт в библиотеку
                  и повторит матчинг (pipeline на стороне worker'а). */""}
-            ${playlist.summary.missing > 0 ? `<button class="secondary" type="button" data-action="qobuz-fetch" data-playlist-id="${playlist.id}">⬇ Скачать missing с Qobuz (${playlist.summary.missing})</button>` : ""}
+            ${playlist.summary.missing > 0 && qobuzStatus?.enabled && qobuzStatus?.configured ? `<button class="secondary" type="button" data-action="qobuz-fetch" data-playlist-id="${playlist.id}" ${qobuzDownloadActive || qobuzEligible === 0 ? "disabled" : ""}>${qobuzDownloadActive ? "Qobuz: загрузка выполняется…" : qobuzEligible === 0 ? "Qobuz: новых треков нет" : `⬇ Проверить новые в Qobuz (${qobuzEligible})`}</button>` : ""}
+            ${playlist.summary.missing > 0 && yandexStatus?.enabled && yandexStatus?.configured ? `<button class="secondary" type="button" data-action="yandex-fetch" data-playlist-id="${playlist.id}" ${yandexDownloadActive || yandexEligible === 0 ? "disabled" : ""}>${yandexDownloadActive ? "Яндекс: загрузка выполняется…" : yandexEligible === 0 ? "Яндекс: новых треков нет" : `⬇ Проверить новые в Яндекс Музыке (${yandexEligible})`}</button>` : ""}
             <a class="button secondary" href="/api/download/playlist/${playlist.id}" download>Скачать ZIP</a>
             <a class="button ghost" href="/api/download/playlist/${playlist.id}/m3u8" download>M3U8</a>
           </div>
         </section>
+        ${qobuzProgressPanel(qobuzJob)}
+        ${yandexProgressPanel(yandexJob)}
         <div class="filter-row" role="group" aria-label="Фильтр статусов">
           ${statuses.map((status) => `
             <button class="ghost small" type="button" data-action="filter" data-status="${status}" aria-pressed="${state.statusFilter === status}">
@@ -307,11 +481,17 @@ async function renderPlaylist(playlistId) {
           `).join("")}
         </div>
         <section class="track-list" id="track-list">
-          ${items.map(trackRow).join("")}
+          ${items.map((item) => trackRow(item, qobuzItems, yandexItems)).join("")}
         </section>
       </main>
     `);
     applyFilter();
+    if (qobuzDownloadActive) {
+      void watchQobuzJob(qobuzJob.id, playlistId, qobuzWatchToken);
+    }
+    if (yandexDownloadActive) {
+      void watchYandexJob(yandexJob.id, playlistId, yandexWatchToken);
+    }
   } catch (exception) {
     if (state.authenticated) showToast(exception.message);
   }
@@ -404,30 +584,149 @@ async function startMatching(button) {
   }
 }
 
-async function waitForJob(jobId, failureLabel = "Задание завершилось ошибкой") {
+async function waitForJob(jobId, failureLabel = "Задание завершилось ошибкой", onProgress = null) {
+  let consecutiveFetchFailures = 0;
   for (;;) {
-    const job = await api(`/api/jobs/${jobId}`);
+    let job;
+    try {
+      job = await api(`/api/jobs/${jobId}`);
+      if (consecutiveFetchFailures > 0) {
+        showToast("Связь восстановлена. Задание продолжается…", 5000);
+        consecutiveFetchFailures = 0;
+      }
+    } catch (exception) {
+      // A long Qobuz download keeps running in Celery even if nginx/backend is
+      // briefly unavailable. Do not turn one failed poll into a false job
+      // failure: reconnect for about a minute and keep polling the same job.
+      if (!(exception instanceof TypeError)) throw exception;
+      consecutiveFetchFailures += 1;
+      if (consecutiveFetchFailures === 1) {
+        showToast("Связь с сервисом прервалась. Задание продолжает работу, переподключаемся…", 10_000);
+      }
+      if (consecutiveFetchFailures >= 12) {
+        throw new Error("Нет связи с сервисом. Задание может продолжаться в фоне — обновите страницу через минуту.");
+      }
+      const retryDelay = Math.min(1000 * (2 ** (consecutiveFetchFailures - 1)), 5000);
+      await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+      continue;
+    }
+    if (onProgress) onProgress(job);
     if (job.status === "done") return job;
     if (job.status === "failed") throw new Error(job.error || failureLabel);
-    await new Promise((resolve) => window.setTimeout(resolve, 800));
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
   }
 }
 
-// Проверка подключения Qobuz: POST /api/qobuz/connect создаёт клиента
-// (фактический логин). При успехе показываем label тарифа (например Studio) —
-// подтверждение, что подписка активна; при 400/502/503 текст ошибки сервера
-// уходит в toast. Кнопка разблокируется только при ошибке: при успехе
-// состояние уже отражено в строке статуса, повторный клик не нужен.
-async function qobuzConnect(button) {
-  button.disabled = true;
+function updateQobuzJobView(job) {
+  const panel = document.querySelector("#qobuz-download-progress");
+  if (panel) panel.outerHTML = qobuzProgressPanel(job);
+
+  const entries = qobuzItemMap(job);
+  document.querySelectorAll(".track-row[data-item-id]").forEach((row) => {
+    const actions = row.querySelector(".track-actions");
+    if (!actions) return;
+    const current = actions.querySelector("[data-qobuz-item-status]");
+    const entry = entries.get(Number(row.dataset.itemId));
+    if (!entry?.status) {
+      current?.remove();
+      return;
+    }
+    const label = qobuzDownloadLabels[entry.status] || entry.status;
+    if (current) {
+      current.className = `status-badge qobuz-download ${entry.status}`;
+      current.textContent = label;
+    } else {
+      actions.insertAdjacentHTML("afterbegin", qobuzTrackBadge(entry));
+    }
+  });
+
+  const button = document.querySelector('[data-action="qobuz-fetch"]');
+  if (button) {
+    const active = ["pending", "running"].includes(job.status);
+    button.disabled = active;
+    if (active) button.textContent = "Qobuz: загрузка выполняется…";
+  }
+}
+
+function updateYandexJobView(job) {
+  const panel = document.querySelector("#yandex-download-progress");
+  if (panel) panel.outerHTML = yandexProgressPanel(job);
+
+  const entries = yandexItemMap(job);
+  document.querySelectorAll(".track-row[data-item-id]").forEach((row) => {
+    const actions = row.querySelector(".track-actions");
+    if (!actions) return;
+    const current = actions.querySelector("[data-yandex-item-status]");
+    const entry = entries.get(Number(row.dataset.itemId));
+    if (!entry?.status) {
+      current?.remove();
+      return;
+    }
+    const label = yandexDownloadLabels[entry.status] || entry.status;
+    const quality = entry.codec && entry.bitrate_kbps
+      ? ` · ${String(entry.codec).toUpperCase()} ${entry.bitrate_kbps} kbps`
+      : "";
+    if (current) {
+      current.className = `status-badge qobuz-download ${entry.status}`;
+      current.textContent = label + quality;
+    } else {
+      actions.insertAdjacentHTML("afterbegin", yandexTrackBadge(entry));
+    }
+  });
+
+  const button = document.querySelector('[data-action="yandex-fetch"]');
+  if (button) {
+    const active = ["pending", "running"].includes(job.status);
+    button.disabled = active;
+    if (active) button.textContent = "Яндекс: загрузка выполняется…";
+  }
+}
+
+async function watchQobuzJob(jobId, playlistId, watchToken) {
   try {
-    const result = await api("/api/qobuz/connect", { method: "POST" });
-    const status = document.querySelector("#qobuz-status");
-    if (status) status.textContent = result.label ? `подключён · ${result.label}` : "подключён";
-    showToast(result.label ? `Qobuz подключён: ${result.label}` : "Qobuz подключён");
+    const finished = await waitForJob(
+      jobId,
+      "Скачивание с Qobuz завершилось ошибкой",
+      (job) => {
+        if (watchToken === state.qobuzWatchToken) updateQobuzJobView(job);
+      },
+    );
+    if (watchToken !== state.qobuzWatchToken) return;
+    const downloads = qobuzJobDownloads(finished);
+    showToast(
+      `Qobuz: в хранилище ${downloads.stored ?? downloads.downloaded ?? 0} · неоднозначно ${downloads.ambiguous ?? 0} · не найдено ${downloads.not_found ?? 0} · ошибок ${(downloads.failed ?? 0) + (downloads.import_failed ?? 0)}`,
+      8000,
+    );
+    await renderPlaylist(playlistId);
   } catch (exception) {
+    if (watchToken !== state.qobuzWatchToken) return;
     showToast(exception.message);
-    button.disabled = false;
+    const button = document.querySelector('[data-action="qobuz-fetch"]');
+    if (button) button.disabled = false;
+  }
+}
+
+async function watchYandexJob(jobId, playlistId, watchToken) {
+  try {
+    const finished = await waitForJob(
+      jobId,
+      "Скачивание из Яндекс Музыки завершилось ошибкой",
+      (job) => {
+        if (watchToken === state.yandexWatchToken) updateYandexJobView(job);
+      },
+    );
+    if (watchToken !== state.yandexWatchToken) return;
+    const downloads = qobuzJobDownloads(finished);
+    showToast(
+      `Яндекс: в хранилище ${downloads.stored ?? downloads.downloaded ?? 0} · неоднозначно ${downloads.ambiguous ?? 0} · не найдено ${downloads.not_found ?? 0} · ошибок ${(downloads.failed ?? 0) + (downloads.import_failed ?? 0)}`,
+      8000,
+    );
+    await renderPlaylist(playlistId);
+  } catch (exception) {
+    if (watchToken !== state.yandexWatchToken) return;
+    showToast(exception.message);
+    const button = document.querySelector('[data-action="yandex-fetch"]');
+    if (button) button.disabled = false;
   }
 }
 
@@ -447,14 +746,24 @@ async function qobuzFetchMissing(button) {
       method: "POST",
       body: JSON.stringify({ playlist_id: playlistId }),
     });
-    showToast("Скачивание с Qobuz запущено. Ждём результат…", 10_000);
-    const finished = await waitForJob(job.id, "Скачивание с Qobuz завершилось ошибкой");
-    const downloads = finished.payload?.downloads || {};
-    showToast(
-      `Qobuz: скачано ${downloads.downloaded ?? 0} · не найдено ${downloads.not_found ?? 0} · ошибок ${downloads.failed ?? 0}`,
-      8000,
-    );
-    await route();
+    showToast("Скачивание с Qobuz запущено. Прогресс появился в плейлисте.", 6000);
+    await renderPlaylist(playlistId);
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+async function yandexFetchMissing(button) {
+  button.disabled = true;
+  try {
+    const playlistId = Number(button.dataset.playlistId);
+    await api("/api/yandex-download/fetch-missing", {
+      method: "POST",
+      body: JSON.stringify({ playlist_id: playlistId }),
+    });
+    showToast("Проверка и загрузка из Яндекс Музыки запущена.", 6000);
+    await renderPlaylist(playlistId);
   } catch (exception) {
     showToast(exception.message);
     button.disabled = false;
@@ -505,8 +814,8 @@ app.addEventListener("click", (event) => {
   const action = button.dataset.action;
   if (action === "logout") logout();
   if (action === "match") startMatching(button);
-  if (action === "qobuz-connect") qobuzConnect(button);
   if (action === "qobuz-fetch") qobuzFetchMissing(button);
+  if (action === "yandex-fetch") yandexFetchMissing(button);
   if (action === "resolve") resolveCandidate(button);
   if (action === "filter") {
     state.statusFilter = button.dataset.status;

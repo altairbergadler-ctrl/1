@@ -12,6 +12,7 @@ from app.models import Job, JobStatus, Playlist, utcnow
 from app.schemas import (
     JobOut,
     QobuzConnectOut,
+    QobuzDownloadEligibilityOut,
     QobuzDownloadUrlIn,
     QobuzFetchMissingIn,
     QobuzSearchOut,
@@ -21,8 +22,11 @@ from app.services.qobuz import (
     QobuzAuthError,
     QobuzConfigurationError,
     QobuzProviderError,
+    QobuzServiceError,
+    QobuzSidecarClient,
     create_qobuz_client,
     is_qobuz_configured,
+    qobuz_download_eligibility,
     search_albums,
     search_tracks,
 )
@@ -32,7 +36,7 @@ from app.workers.tasks import qobuz_download_task
 # API интеграции Qobuz. Все endpoints закрыты require_auth (Bearer/cookie,
 # как и остальные роутеры сервиса).
 #
-# Общие правила маппинга ошибок (ограничения RESTRICT, assessment §5 и §7:
+# Общие правила маппинга ошибок (ограничения RESTRICT, assessment sections 3/7:
 # API никогда не возвращает секреты/токены — в detail только нейтральные
 # формулировки без email, токена и параметров запроса):
 #   503 — интеграция выключена или креденшелы не заданы в .env;
@@ -57,12 +61,16 @@ _QOBUZ_QUEUE_LOCK_ID = 2026081005
 # тем, что не смотрит на флаг QOBUZ_ENABLED — фронтенд показывает оба факта
 # раздельно («не настроен» vs «включён, но без креденшелов»). Сами значения
 # секретов здесь (и anywhere else в API) не возвращаются.
-def _credentials_present() -> bool:
-    if str(settings.qobuz_auth_token or "").strip():
-        return True
-    return bool(
-        str(settings.qobuz_email or "").strip() and settings.qobuz_password
-    )
+def _sidecar_status() -> dict:
+    if not is_qobuz_configured(settings):
+        return {"configured": False}
+    try:
+        return QobuzSidecarClient(
+            settings.qobuz_sidecar_url,
+            settings.qobuz_internal_token,
+        ).status()
+    except QobuzServiceError:
+        return {"configured": False}
 
 
 # 503, если интеграция выключена или креденшелы не заданы: дальше идти
@@ -103,12 +111,58 @@ def qobuz_status():
     # Только нечувствительные флаги и лимиты: enabled (выключатель),
     # configured (креденшелы заданы?), качество и лимит треков за запуск.
     # Секреты/токены/API-ответы Qobuz здесь не возвращаются никогда.
+    sidecar = _sidecar_status()
     return {
         "enabled": settings.qobuz_enabled,
-        "configured": _credentials_present(),
+        "configured": bool(sidecar.get("configured")),
         "quality": settings.qobuz_quality,
         "max_tracks_per_run": settings.qobuz_max_tracks_per_run,
+        "batch_delay_seconds": settings.qobuz_batch_delay_seconds,
     }
+
+
+def _payload_playlist_id(payload: str | None) -> int | None:
+    try:
+        data = json.loads(payload or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get("playlist_id")
+    if value is None and isinstance(data.get("downloads"), dict):
+        value = data["downloads"].get("playlist_id")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/download-status/{playlist_id}", response_model=JobOut | None)
+def qobuz_download_status(playlist_id: int, db: Session = Depends(get_db)):
+    """Return persisted progress for the latest Qobuz run of a playlist."""
+
+    if db.get(Playlist, playlist_id) is None:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    jobs = db.scalars(
+        select(Job)
+        .where(Job.type == "qobuz_download")
+        .order_by(Job.created_at.desc(), Job.id.desc())
+    )
+    return next(
+        (job for job in jobs if _payload_playlist_id(job.payload) == playlist_id),
+        None,
+    )
+
+
+@router.get(
+    "/download-eligibility/{playlist_id}",
+    response_model=QobuzDownloadEligibilityOut,
+)
+def qobuz_eligibility(playlist_id: int, db: Session = Depends(get_db)):
+    playlist = db.get(Playlist, playlist_id)
+    if playlist is None:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    return qobuz_download_eligibility(db, playlist)
 
 
 @router.post("/connect", response_model=QobuzConnectOut)
@@ -117,7 +171,7 @@ def qobuz_connect():
     # При успехе отдаём только label тарифа (например Studio) — он не секрет
     # и нужен фронтенду как подтверждение активной платной подписки
     # (бесплатные аккаунты qobuz-dl отклоняет сам через IneligibleError,
-    # assessment §4). Коды: 503 не настроен, 400 креденшелы отклонены
+    # assessment section 3). Коды: 503 не настроен, 400 креденшелы отклонены
     # (в т.ч. протухший QOBUZ_AUTH_TOKEN), 502 Qobuz недоступен.
     _require_configured()
     client = _make_client()
@@ -186,9 +240,9 @@ def _queue_qobuz_job(
         )
 
     # Stale-cutoff: задание, чей heartbeat молчит дольше
-    # QOBUZ_DOWNLOAD_JOB_STALE_SECONDS, считается зависшим (у qobuz-dl есть
-    # вызовы requests без timeout — assessment §3.3, дефект 1) и переводится
-    # в failed, чтобы не блокировать очередь навечно.
+    # QOBUZ_DOWNLOAD_JOB_STALE_SECONDS, считается зависшим и переводится в
+    # failed, чтобы не блокировать очередь навечно. Network timeout sidecar
+    # остаётся первой линией защиты.
     now = utcnow()
     cutoff = now - timedelta(seconds=settings.qobuz_download_job_stale_seconds)
     stale_job_ids = db.scalars(
@@ -217,12 +271,24 @@ def _queue_qobuz_job(
         .order_by(Job.created_at.desc())
     )
     if active_job is not None:
-        # Ограничение RESTRICT (assessment §7, п. 4): один активный qobuz-job.
+        # Ограничение RESTRICT (assessment section 7): один активный qobuz-job.
         # Повторный запрос НЕ создаёт параллельное скачивание, а возвращает
         # уже идущее задание — клиент просто продолжает его polling.
+        active_payload = json.loads(active_job.payload or "{}")
+        requested_payload = {"mode": mode, "playlist_id": playlist_id, "url": url}
+        if all(active_payload.get(key) == value for key, value in requested_payload.items()):
+            if stale_job_ids:
+                db.commit()
+            return active_job
         if stale_job_ids:
             db.commit()
-        return active_job
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "job_id": active_job.id,
+                "message": "Another Qobuz download is already running",
+            },
+        )
 
     job = Job(
         type="qobuz_download",

@@ -31,7 +31,9 @@ from app.services.normalize import (
     normalize_title,
 )
 
-SUPPORTED_EXTENSIONS = frozenset({".flac", ".alac", ".wav", ".dsf", ".dff", ".ape"})
+SUPPORTED_EXTENSIONS = frozenset(
+    {".flac", ".alac", ".wav", ".dsf", ".dff", ".ape", ".mp3", ".aac", ".m4a"}
+)
 _ALBUM_RE = re.compile(
     r"^(?P<title>.+?)(?:\s*\((?P<year>(?:19|20)\d{2})\))?"
     r"(?:\s*\[[^\]]+\])?$"
@@ -320,6 +322,9 @@ def _validate_container(path: Path, audio: Any) -> None:
         ".dsf": {"DSF"},
         ".dff": {"DSDIFF"},
         ".ape": {"MonkeysAudio"},
+        ".mp3": {"MP3"},
+        ".aac": {"AAC"},
+        ".m4a": {"MP4"},
     }
     class_name = type(audio).__name__
     if class_name not in expected_types[path.suffix.casefold()]:

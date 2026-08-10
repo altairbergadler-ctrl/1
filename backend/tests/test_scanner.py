@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -42,17 +43,59 @@ def _count(db, model) -> int:
 
 
 def test_extension_filter_is_recursive_and_case_insensitive(tmp_path):
-    expected = {"flac", "alac", "wav", "dsf", "dff", "ape"}
+    expected = {"flac", "alac", "wav", "dsf", "dff", "ape", "mp3", "aac", "m4a"}
     for extension in expected:
         path = tmp_path / "nested" / f"track.{extension.upper()}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
-    (tmp_path / "nested" / "ignored.mp3").touch()
+    (tmp_path / "nested" / "ignored.txt").touch()
 
     discovered = {
         path.suffix.casefold().lstrip(".") for path in iter_audio_files(tmp_path)
     }
     assert discovered == expected
+
+
+@pytest.mark.parametrize(
+    ("extension", "codec", "format_args"),
+    [
+        ("mp3", "libmp3lame", []),
+        ("m4a", "aac", []),
+        ("aac", "aac", ["-f", "adts"]),
+    ],
+)
+def test_metadata_reader_accepts_yandex_fallback_containers(
+    tmp_path, ffmpeg_binary, extension, codec, format_args
+):
+    library = tmp_path / "library"
+    target = library / "Tagged Artist" / "Tagged Album" / f"01 - Fallback.{extension}"
+    target.parent.mkdir(parents=True)
+    subprocess.run(
+        [
+            ffmpeg_binary,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:a",
+            codec,
+            *format_args,
+            "-y",
+            str(target),
+        ],
+        check=True,
+    )
+
+    metadata = read_audio_metadata(target, library)
+
+    assert metadata.format == extension
+    assert metadata.duration_ms is not None
+    assert metadata.duration_ms > 0
+    assert metadata.artist == "Tagged Artist"
+    assert metadata.album == "Tagged Album"
 
 
 def test_extension_filter_skips_file_symlinks(tmp_path, monkeypatch):

@@ -25,7 +25,13 @@ services:
 
   migrate:
     build: ./backend
-    env_file: .env
+    env_file: ${MUSIC_SERVICE_ENV_FILE:-.env}
+    environment:
+      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN}
+      QOBUZ_AUTH_TOKEN: ""
+      QOBUZ_USER_ID: ""
+      QOBUZ_EMAIL: ""
+      QOBUZ_PASSWORD: ""
     command: alembic upgrade head
     volumes:
       - ./backend:/code
@@ -35,7 +41,19 @@ services:
 
   backend:
     build: ./backend
-    env_file: .env
+    env_file: ${MUSIC_SERVICE_ENV_FILE:-.env}
+    environment:
+      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN}
+      QOBUZ_ENABLED: ${QOBUZ_ENABLED:-false}
+      QOBUZ_AUTH_TOKEN: ""
+      QOBUZ_USER_ID: ""
+      QOBUZ_EMAIL: ""
+      QOBUZ_PASSWORD: ""
+      QOBUZ_SIDECAR_URL: http://qobuz-sidecar:8090
+      QOBUZ_INTERNAL_TOKEN: ${QOBUZ_INTERNAL_TOKEN:-}
+      YANDEX_DOWNLOAD_ENABLED: ${YANDEX_DOWNLOAD_ENABLED:-false}
+      YANDEX_SIGNER_URL: http://yandex-signer:8091
+      YANDEX_INTERNAL_TOKEN: ${YANDEX_INTERNAL_TOKEN:-${QOBUZ_INTERNAL_TOKEN:-}}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/code
@@ -43,11 +61,8 @@ services:
         source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
         target: /music/library
         read_only: true
-      - type: bind
-        source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
-        target: /music/staging
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -55,10 +70,28 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      yandex-signer:
+        condition: service_healthy
+    networks:
+      - default
+      - qobuz_control
+      - yandex_control
 
   worker:
     build: ./backend
-    env_file: .env
+    env_file: ${MUSIC_SERVICE_ENV_FILE:-.env}
+    environment:
+      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN}
+      QOBUZ_ENABLED: ${QOBUZ_ENABLED:-false}
+      QOBUZ_AUTH_TOKEN: ""
+      QOBUZ_USER_ID: ""
+      QOBUZ_EMAIL: ""
+      QOBUZ_PASSWORD: ""
+      QOBUZ_SIDECAR_URL: http://qobuz-sidecar:8090
+      QOBUZ_INTERNAL_TOKEN: ${QOBUZ_INTERNAL_TOKEN:-}
+      YANDEX_DOWNLOAD_ENABLED: ${YANDEX_DOWNLOAD_ENABLED:-false}
+      YANDEX_SIGNER_URL: http://yandex-signer:8091
+      YANDEX_INTERNAL_TOKEN: ${YANDEX_INTERNAL_TOKEN:-${QOBUZ_INTERNAL_TOKEN:-}}
     command: celery -A app.workers.celery_app.celery worker --loglevel=INFO
     volumes:
       - ./backend:/code
@@ -78,14 +111,98 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      yandex-signer:
+        condition: service_healthy
+    networks:
+      - default
+      - qobuz_control
+      - yandex_control
+
+  yandex-signer:
+    build:
+      context: ./yandex_signer
+      dockerfile: Dockerfile
+    environment:
+      YANDEX_INTERNAL_TOKEN: ${YANDEX_INTERNAL_TOKEN:-${QOBUZ_INTERNAL_TOKEN:-}}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - yandex_control
+    healthcheck:
+      test: ["CMD", "/yandex-signer", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qobuz-sidecar:
+    build:
+      context: ./qobuz_sidecar
+      dockerfile: Dockerfile
+    environment:
+      QOBUZ_AUTH_TOKEN: ${QOBUZ_AUTH_TOKEN:-}
+      QOBUZ_USER_ID: ${QOBUZ_USER_ID:-}
+      QOBUZ_INTERNAL_TOKEN: ${QOBUZ_INTERNAL_TOKEN:-}
+      QOBUZ_STAGING_PATH: /music/staging
+      QOBUZ_CONNECT_TIMEOUT_SECONDS: ${QOBUZ_CONNECT_TIMEOUT_SECONDS:-10}
+      QOBUZ_READ_TIMEOUT_SECONDS: ${QOBUZ_READ_TIMEOUT_SECONDS:-120}
+      QOBUZ_MAX_FILE_BYTES: ${QOBUZ_MAX_FILE_BYTES:-4294967296}
+      HTTPS_PROXY: http://qobuz-egress:3128
+      HTTP_PROXY: http://qobuz-egress:3128
+      NO_PROXY: 127.0.0.1,localhost
+    volumes:
+      - type: bind
+        source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
+        target: /music/staging
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      qobuz-egress:
+        condition: service_started
+    networks:
+      - qobuz_control
+      - qobuz_egress
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qobuz-egress:
+    build:
+      context: ./qobuz_sidecar
+      dockerfile: Dockerfile.proxy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - default
+      - qobuz_egress
 
   frontend:
     build: ./frontend
     ports:
-      - "8080:80"
+      - "${FRONTEND_HOST_PORT:-8080}:80"
     depends_on:
       backend:
         condition: service_started
 
 volumes:
   pgdata:
+
+networks:
+  qobuz_control:
+    internal: true
+  qobuz_egress:
+    internal: true
+  yandex_control:
+    internal: true

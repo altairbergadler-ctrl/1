@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from app.models import (
     Playlist,
     PlaylistItem,
     PlaylistSource,
+    ProviderAttempt,
     ServiceEnum,
 )
 from app.services import qobuz as qobuz_service
@@ -24,7 +26,12 @@ from app.services.qobuz import (
     QobuzConfigurationError,
     QobuzProviderError,
     QobuzSearchCandidate,
+    choose_track_candidate,
+    fetch_missing_tracks,
     import_files_to_library,
+    mark_downloads_stored,
+    provider_lookup_key,
+    qobuz_download_eligibility,
     select_best_track_candidate,
     search_albums,
     search_tracks,
@@ -33,12 +40,14 @@ from app.services.qobuz import (
 from app.workers.tasks import qobuz_download_task
 
 
-def _configure_qobuz(monkeypatch, *, enabled=True, email="user@example.com", password="secret"):
+def _configure_qobuz(monkeypatch, *, enabled=True):
     monkeypatch.setattr("app.config.settings.qobuz_enabled", enabled)
-    monkeypatch.setattr("app.config.settings.qobuz_email", email)
-    monkeypatch.setattr("app.config.settings.qobuz_password", password)
-    monkeypatch.setattr("app.config.settings.qobuz_auth_token", "")
-    monkeypatch.setattr("app.config.settings.qobuz_user_id", "")
+    monkeypatch.setattr(
+        "app.config.settings.qobuz_sidecar_url", "http://qobuz-sidecar.invalid"
+    )
+    monkeypatch.setattr(
+        "app.config.settings.qobuz_internal_token", "test-sidecar-token" * 2
+    )
 
 
 class FakeQobuzClient:
@@ -103,6 +112,7 @@ def test_status_reports_disabled_and_unconfigured(api_client, auth_headers):
         "configured": False,
         "quality": 27,
         "max_tracks_per_run": 25,
+        "batch_delay_seconds": 30.0,
     }
 
 
@@ -110,6 +120,7 @@ def test_status_reports_configured_without_leaking_secrets(
     api_client, auth_headers, monkeypatch
 ):
     _configure_qobuz(monkeypatch)
+    monkeypatch.setattr("app.api.qobuz._sidecar_status", lambda: {"configured": True})
 
     response = api_client.get("/api/qobuz/status", headers=auth_headers)
 
@@ -163,6 +174,8 @@ def test_qobuz_endpoints_require_auth(api_client):
     assert api_client.get("/api/qobuz/status").status_code == 401
     assert api_client.post("/api/qobuz/connect").status_code == 401
     assert api_client.get("/api/qobuz/search?q=x").status_code == 401
+    assert api_client.get("/api/qobuz/download-status/1").status_code == 401
+    assert api_client.get("/api/qobuz/download-eligibility/1").status_code == 401
     assert api_client.post("/api/qobuz/download-url", json={"url": "u"}).status_code == 401
     assert (
         api_client.post("/api/qobuz/fetch-missing", json={"playlist_id": 1}).status_code
@@ -252,24 +265,29 @@ def test_search_endpoint_provider_error_returns_502(
 # --- candidate selection --------------------------------------------------------
 
 
-def _candidate(title, artist="Tagged Artist", duration_ms=187_000):
+def _candidate(title, artist="Tagged Artist", duration_ms=187_000, **overrides):
+    values = {
+        "qobuz_id": "1",
+        "artist": artist,
+        "title": title,
+        "album": "Tagged Album",
+        "duration_ms": duration_ms,
+        "isrc": None,
+        "hires": True,
+        "url": "https://play.qobuz.com/track/1",
+    }
+    values.update(overrides)
     return QobuzSearchCandidate(
-        qobuz_id="1",
-        artist=artist,
-        title=title,
-        album="Tagged Album",
-        duration_ms=duration_ms,
-        isrc=None,
-        hires=True,
-        url="https://play.qobuz.com/track/1",
+        **values,
     )
 
 
 def test_select_best_track_candidate_picks_best_fuzzy_match():
     best = select_best_track_candidate(
-        artist_raw="The Tagged Artist",
+        artist_raw="Tagged Artist",
         title_raw="First Track",
-        duration_ms=None,
+        album_raw="Different Album",
+        duration_ms=187_000,
         candidates=[_candidate("Totally Different Song"), _candidate("First Track")],
     )
 
@@ -281,7 +299,7 @@ def test_select_best_track_candidate_enforces_threshold():
     best = select_best_track_candidate(
         artist_raw="Unknown Artist",
         title_raw="Unknown Title",
-        duration_ms=None,
+        duration_ms=187_000,
         candidates=[_candidate("First Track")],
     )
 
@@ -308,6 +326,201 @@ def test_select_best_track_candidate_enforces_duration_tolerance():
         candidates=[outside],
     )
     assert none_found is None
+
+
+def test_select_best_track_candidate_rejects_wrong_version_markers():
+    candidate = _candidate("First Track (Live)")
+
+    best = select_best_track_candidate(
+        artist_raw="Tagged Artist",
+        title_raw="First Track",
+        album_raw="Tagged Album",
+        duration_ms=187_000,
+        candidates=[candidate],
+    )
+
+    assert best is None
+
+
+def test_select_best_track_candidate_prefers_highest_quality_for_same_isrc():
+    low = _candidate(
+        "First Track (Live)",
+        qobuz_id="low",
+        isrc="USBBB2400002",
+        maximum_bit_depth=16,
+        maximum_sampling_rate=44,
+    )
+    high = replace(
+        low,
+        qobuz_id="high",
+        maximum_bit_depth=24,
+        maximum_sampling_rate=192,
+    )
+
+    selected, method = choose_track_candidate(
+        artist_raw="Tagged Artist",
+        title_raw="First Track",
+        album_raw="Tagged Album",
+        isrc="US-BBB-24-00002",
+        duration_ms=187_000,
+        candidates=[low, high],
+    )
+
+    assert selected is high
+    assert method == "isrc"
+
+
+def test_select_best_track_candidate_rejects_distinct_exact_recordings():
+    first = _candidate("First Track", qobuz_id="1", isrc="USBBB2400001")
+    second = replace(first, qobuz_id="2", isrc="USBBB2400002")
+
+    selected, method = choose_track_candidate(
+        artist_raw="Tagged Artist",
+        title_raw="First Track",
+        album_raw="Tagged Album",
+        isrc=None,
+        duration_ms=187_000,
+        candidates=[first, second],
+    )
+
+    assert selected is None
+    assert method == "ambiguous"
+
+
+def test_select_best_track_candidate_rejects_ambiguous_fuzzy_results():
+    first = _candidate("First Trak", artist="Tagged Artist")
+    second = replace(first, qobuz_id="2", isrc="USBBB2400002")
+
+    best = select_best_track_candidate(
+        artist_raw="Tagged Artist",
+        title_raw="First Track",
+        album_raw="Tagged Album",
+        duration_ms=187_000,
+        candidates=[first, second],
+    )
+
+    assert best is None
+
+
+def test_fetch_missing_persists_queued_searching_and_downloading_states(
+    db, monkeypatch, tmp_path
+):
+    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    playlist = Playlist(source=source, external_id="progress", name="Progress")
+    item = PlaylistItem(
+        playlist=playlist,
+        position=0,
+        artist_raw="Tagged Artist",
+        title_raw="First Track",
+        album_raw="Tagged Album",
+        artist_norm=normalize_artist("Tagged Artist"),
+        title_norm=normalize_title("First Track"),
+        album_norm=normalize_album("Tagged Album"),
+        duration_ms=187_000,
+    )
+    db.add_all([source, playlist, item])
+    db.flush()
+    db.add(
+        Match(
+            playlist_item_id=item.id,
+            status=MatchStatus.missing,
+            confidence=0.0,
+            method="none",
+        )
+    )
+    db.commit()
+    monkeypatch.setattr("app.config.settings.qobuz_request_delay_seconds", 0)
+    monkeypatch.setattr("app.config.settings.qobuz_max_tracks_per_run", 25)
+    target = tmp_path / "First Track.flac"
+    target.write_bytes(b"audio")
+    monkeypatch.setattr(
+        "app.services.qobuz.download_track_to_staging",
+        lambda *args, **kwargs: [target],
+    )
+    snapshots: list[dict] = []
+
+    summary, _ = fetch_missing_tracks(
+        db,
+        playlist,
+        FakeQobuzClient(tracks=[_track_payload(101, "First Track")]),
+        progress_callback=lambda progress: snapshots.append(
+            json.loads(json.dumps(progress))
+        ),
+    )
+
+    states = [snapshot["items"][0]["status"] for snapshot in snapshots]
+    assert states[0] == "queued"
+    assert states.index("searching") < states.index("downloading") < states.index("downloaded")
+    assert summary["total_missing"] == 1
+    assert summary["eligible_total"] == 1
+    assert summary["batch_count"] == 1
+    assert summary["processed"] == 1
+
+
+def test_fetch_missing_sweeps_every_unattempted_track_in_batches(
+    db, monkeypatch
+):
+    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    playlist = Playlist(source=source, external_id="full-sweep", name="Full sweep")
+    db.add_all([source, playlist])
+    db.flush()
+    items = []
+    for position in range(53):
+        title = f"Track {position:02d}"
+        item = PlaylistItem(
+            playlist=playlist,
+            position=position,
+            artist_raw="Artist",
+            title_raw=title,
+            artist_norm=normalize_artist("Artist"),
+            title_norm=normalize_title(title),
+            album_norm="",
+        )
+        items.append(item)
+        db.add(item)
+    db.flush()
+    db.add_all(
+        [Match(playlist_item_id=item.id, status=MatchStatus.missing) for item in items]
+    )
+    db.commit()
+    monkeypatch.setattr("app.config.settings.qobuz_max_tracks_per_run", 25)
+    monkeypatch.setattr("app.config.settings.qobuz_request_delay_seconds", 0)
+    monkeypatch.setattr("app.config.settings.qobuz_batch_delay_seconds", 7)
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.services.qobuz.time.sleep", sleeps.append)
+    snapshots: list[dict] = []
+
+    summary, files = fetch_missing_tracks(
+        db,
+        playlist,
+        FakeQobuzClient(),
+        progress_callback=lambda progress: snapshots.append(
+            json.loads(json.dumps(progress))
+        ),
+    )
+
+    assert files == []
+    assert summary["total_missing"] == 53
+    assert summary["eligible_total"] == 53
+    assert summary["processed"] == 53
+    assert summary["not_found"] == 53
+    assert summary["batch_size"] == 25
+    assert summary["batch_count"] == 3
+    assert summary["current_batch"] == 3
+    assert sleeps == [7, 7]
+    assert [
+        snapshot["current_batch"]
+        for snapshot in snapshots
+        if snapshot.get("batch_state") == "paused"
+    ] == [1, 2]
+    assert db.query(ProviderAttempt).filter_by(provider="qobuz").count() == 53
+
+    eligibility = qobuz_download_eligibility(db, playlist)
+    assert eligibility == {
+        "total_missing": 53,
+        "eligible": 0,
+        "already_checked": 53,
+    }
 
 
 # --- job creation -----------------------------------------------------------------
@@ -347,6 +560,28 @@ def test_download_url_creates_single_active_job(
     assert json.loads(job.payload)["mode"] == "url"
 
 
+def test_conflicting_qobuz_request_returns_409(
+    api_client, auth_headers, monkeypatch
+):
+    _configure_qobuz(monkeypatch)
+    monkeypatch.setattr("app.api.qobuz.qobuz_download_task.delay", lambda *args: None)
+
+    first = api_client.post(
+        "/api/qobuz/download-url",
+        json={"url": "https://play.qobuz.com/track/123"},
+        headers=auth_headers,
+    )
+    conflict = api_client.post(
+        "/api/qobuz/download-url",
+        json={"url": "https://play.qobuz.com/track/456"},
+        headers=auth_headers,
+    )
+
+    assert first.status_code == 202
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["job_id"] == first.json()["id"]
+
+
 def test_fetch_missing_validates_playlist_and_reuses_active_job(
     api_client, auth_headers, db, monkeypatch
 ):
@@ -380,6 +615,134 @@ def test_fetch_missing_validates_playlist_and_reuses_active_job(
     assert duplicate.json()["id"] == first.json()["id"]
     assert len(queued) == 1
     assert queued[0][1:] == ("fetch_missing", playlist.id, None)
+
+
+def test_download_status_returns_latest_persisted_progress_for_playlist(
+    api_client, auth_headers, db
+):
+    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    playlist = Playlist(source=source, external_id="p1", name="Playlist")
+    empty_playlist = Playlist(source=source, external_id="p2", name="No runs")
+    db.add_all([source, playlist, empty_playlist])
+    db.flush()
+    older = Job(
+        type="qobuz_download",
+        status=JobStatus.done,
+        payload=json.dumps(
+            {
+                "phase": "completed",
+                "downloads": {"playlist_id": playlist.id, "processed": 1},
+            }
+        ),
+    )
+    latest = Job(
+        type="qobuz_download",
+        status=JobStatus.running,
+        payload=json.dumps(
+            {
+                "phase": "downloading",
+                "playlist_id": playlist.id,
+                "downloads": {
+                    "batch_total": 2,
+                    "processed": 1,
+                    "items": [
+                        {"item_id": 10, "status": "stored"},
+                        {"item_id": 11, "status": "downloading"},
+                    ],
+                },
+            }
+        ),
+    )
+    db.add_all([older, latest])
+    db.commit()
+
+    response = api_client.get(
+        f"/api/qobuz/download-status/{playlist.id}", headers=auth_headers
+    )
+    empty = api_client.get(
+        f"/api/qobuz/download-status/{empty_playlist.id}", headers=auth_headers
+    )
+    missing = api_client.get("/api/qobuz/download-status/9999", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == latest.id
+    assert response.json()["payload"]["downloads"]["items"][1]["status"] == "downloading"
+    assert empty.status_code == 200
+    assert empty.json() is None
+    assert missing.status_code == 404
+
+
+def test_download_eligibility_is_provider_specific(
+    api_client, auth_headers, db
+):
+    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    playlist = Playlist(source=source, external_id="eligible", name="Eligible")
+    first = PlaylistItem(
+        playlist=playlist,
+        position=0,
+        artist_raw="Artist",
+        title_raw="First",
+        artist_norm=normalize_artist("Artist"),
+        title_norm=normalize_title("First"),
+        album_norm="",
+    )
+    second = PlaylistItem(
+        playlist=playlist,
+        position=1,
+        artist_raw="Artist",
+        title_raw="Second",
+        artist_norm=normalize_artist("Artist"),
+        title_norm=normalize_title("Second"),
+        album_norm="",
+    )
+    third = PlaylistItem(
+        playlist=playlist,
+        position=2,
+        artist_raw="Artist",
+        title_raw="Already stored elsewhere",
+        artist_norm=normalize_artist("Artist"),
+        title_norm=normalize_title("Already stored elsewhere"),
+        album_norm="",
+    )
+    db.add_all([source, playlist, first, second, third])
+    db.flush()
+    db.add_all(
+        [
+            Match(playlist_item_id=first.id, status=MatchStatus.missing),
+            Match(playlist_item_id=second.id, status=MatchStatus.missing),
+            Match(playlist_item_id=third.id, status=MatchStatus.missing),
+            ProviderAttempt(
+                provider="qobuz",
+                lookup_key=provider_lookup_key(first),
+                playlist_item_id=first.id,
+                status="not_found",
+            ),
+            ProviderAttempt(
+                provider="future-source",
+                lookup_key=provider_lookup_key(second),
+                playlist_item_id=second.id,
+                status="not_found",
+            ),
+            ProviderAttempt(
+                provider="future-source",
+                lookup_key=provider_lookup_key(third),
+                playlist_item_id=third.id,
+                status="stored",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = api_client.get(
+        f"/api/qobuz/download-eligibility/{playlist.id}", headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_missing": 3,
+        "eligible": 1,
+        "already_checked": 2,
+    }
 
 
 def test_download_endpoints_require_configuration(
@@ -430,7 +793,7 @@ def test_verify_staging_files_rejects_broken_and_non_audio(tmp_path, ffmpeg_bina
     reasons = {Path(entry["path"]).name: entry["reason"] for entry in rejected}
     assert set(reasons) == {"broken.flac", "empty.mp3", "cover.jpg"}
     assert reasons["cover.jpg"] == "unsupported extension"
-    assert reasons["empty.mp3"] == "empty or missing file"
+    assert reasons["empty.mp3"] == "unsupported extension"
 
 
 def test_import_moves_audio_and_preserves_structure(tmp_path):
@@ -472,45 +835,42 @@ def test_import_never_overwrites_and_rejects_traversal(tmp_path):
     assert report["rejected"][0]["path"] == str(outside)
 
 
-# --- Redis bundle cache -----------------------------------------------------------
+def test_mark_downloads_stored_preserves_per_track_outcomes(tmp_path):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    first = staging / "Album" / "01.flac"
+    second = staging / "Album" / "02.flac"
+    first.parent.mkdir(parents=True)
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    conflict = library / "Album" / "02.flac"
+    conflict.parent.mkdir(parents=True)
+    conflict.write_bytes(b"existing")
+    downloads = {
+        "downloaded": 2,
+        "items": [
+            {"item_id": 1, "status": "downloaded", "files": [str(first)]},
+            {"item_id": 2, "status": "downloaded", "files": [str(second)]},
+            {"item_id": 3, "status": "not_found"},
+        ],
+    }
+
+    report = import_files_to_library([first, second], staging, library)
+    mark_downloads_stored(downloads, report, staging, library)
+
+    assert [item["status"] for item in downloads["items"]] == [
+        "stored",
+        "conflict",
+        "not_found",
+    ]
+    assert downloads["stored"] == 1
+    assert downloads["conflicts"] == 1
+    assert downloads["import_failed"] == 0
+    assert downloads["items"][0]["file_count"] == 1
+    assert "files" not in downloads["items"][0]
 
 
-class FakeRedis:
-    def __init__(self):
-        self.values: dict[str, str] = {}
-
-    def get(self, key):
-        return self.values.get(key)
-
-    def set(self, key, value, ex=None):
-        self.values[key] = value
-        return True
-
-    def delete(self, key):
-        self.values.pop(key, None)
-
-
-def test_bundle_cache_roundtrip_and_unavailable_fallback(monkeypatch):
-    import redis
-
-    fake = FakeRedis()
-    monkeypatch.setattr(
-        redis.Redis, "from_url", staticmethod(lambda *args, **kwargs: fake)
-    )
-
-    assert qobuz_service._load_cached_bundle() is None
-    qobuz_service._store_bundle_cache("123456789", ["sec1", "sec2"])
-    assert qobuz_service._load_cached_bundle() == ("123456789", ["sec1", "sec2"])
-    qobuz_service._drop_bundle_cache()
-    assert qobuz_service._load_cached_bundle() is None
-
-    def broken_redis(*args, **kwargs):
-        raise redis.exceptions.RedisError("redis down")
-
-    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(broken_redis))
-    assert qobuz_service._load_cached_bundle() is None  # non-fatal by design
-    qobuz_service._store_bundle_cache("1", ["s"])  # must not raise
-    qobuz_service._drop_bundle_cache()  # must not raise
+# --- isolated sidecar boundary -------------------------------------------------
 
 
 def test_create_client_requires_configuration(monkeypatch):
@@ -519,99 +879,51 @@ def test_create_client_requires_configuration(monkeypatch):
         qobuz_service.create_qobuz_client()
 
 
-# --- token auth (browser session, Qobuz OAuth workaround) ---------------------------
-
-
-def _fake_modules_with_client(client_cls):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        bundle=None,
-        downloader=None,
-        qopy=SimpleNamespace(Client=client_cls),
-        get_url_info=None,
-        AuthenticationError=type("AuthenticationError", (Exception,), {}),
-        IneligibleError=type("IneligibleError", (Exception,), {}),
-        InvalidAppIdError=type("InvalidAppIdError", (Exception,), {}),
-        InvalidAppSecretError=type("InvalidAppSecretError", (Exception,), {}),
-        InvalidQuality=type("InvalidQuality", (Exception,), {}),
-        NonStreamable=type("NonStreamable", (Exception,), {}),
-    )
-
-
-def test_is_qobuz_configured_accepts_token_without_password(monkeypatch):
-    _configure_qobuz(monkeypatch, email="", password="")
-    assert qobuz_service.is_qobuz_configured() is False
-
-    monkeypatch.setattr("app.config.settings.qobuz_auth_token", "token-value")
+def test_is_qobuz_configured_requires_only_internal_control_settings(monkeypatch):
+    _configure_qobuz(monkeypatch)
     assert qobuz_service.is_qobuz_configured() is True
 
-
-class TokenPathFakeClient:
-    login_called = False
-
-    def __init__(self, *args, **kwargs):
-        TokenPathFakeClient.login_called = True
-        raise AssertionError("password login must be skipped for token auth")
-
-    def cfg_setup(self):
-        self.sec = self.secrets[0]
-
-    def api_call(self, epoint, **kwargs):
-        assert epoint == "user/get"
-        return {"credential": {"parameters": {"short_label": "Studio"}}}
+    monkeypatch.setattr("app.config.settings.qobuz_internal_token", "")
+    assert qobuz_service.is_qobuz_configured() is False
+    monkeypatch.setattr("app.config.settings.qobuz_internal_token", "too-short")
+    assert qobuz_service.is_qobuz_configured() is False
 
 
-def test_create_client_token_path_skips_password_login(monkeypatch):
+def test_create_client_connects_to_sidecar_without_provider_secrets(monkeypatch):
     _configure_qobuz(monkeypatch)
-    monkeypatch.setattr("app.config.settings.qobuz_auth_token", " token-value ")
-    monkeypatch.setattr("app.config.settings.qobuz_user_id", "14097479")
-    monkeypatch.setattr(
-        qobuz_service,
-        "_get_bundle",
-        lambda force_refresh=False: ("123456789", ["sec1"]),
-    )
-    monkeypatch.setattr(
-        qobuz_service,
-        "_qobuz_modules",
-        lambda: _fake_modules_with_client(TokenPathFakeClient),
-    )
-    TokenPathFakeClient.login_called = False
+    calls: list[str] = []
 
+    def connect(self):
+        calls.append(self.internal_token)
+        self.label = "Studio"
+        return {"connected": True, "label": "Studio"}
+
+    monkeypatch.setattr(qobuz_service.QobuzSidecarClient, "connect", connect)
     client = qobuz_service.create_qobuz_client()
 
-    assert TokenPathFakeClient.login_called is False
-    assert client.uat == "token-value"
-    assert client.session.headers["X-User-Auth-Token"] == "token-value"
-    assert client.session.headers["X-App-Id"] == "123456789"
-    assert client.sec == "sec1"
     assert client.label == "Studio"
+    assert calls == ["test-sidecar-token" * 2]
+    assert not hasattr(qobuz_service.settings, "qobuz_auth_token")
 
 
-def test_token_client_rejected_token_maps_to_auth_error(monkeypatch):
-    import requests
-
-    class RejectingClient(TokenPathFakeClient):
-        def cfg_setup(self):
-            response = requests.Response()
-            response.status_code = 401
-            raise requests.exceptions.HTTPError(response=response)
-
+def test_sidecar_http_error_does_not_include_response_body(monkeypatch):
     _configure_qobuz(monkeypatch)
-    monkeypatch.setattr("app.config.settings.qobuz_auth_token", "stale-token")
-    monkeypatch.setattr(
-        qobuz_service,
-        "_get_bundle",
-        lambda force_refresh=False: ("123456789", ["sec1"]),
-    )
-    monkeypatch.setattr(
-        qobuz_service,
-        "_qobuz_modules",
-        lambda: _fake_modules_with_client(RejectingClient),
+
+    class Response:
+        status_code = 502
+        text = "provider-token-should-never-escape"
+
+        def json(self):
+            return {"error": self.text}
+
+    monkeypatch.setattr(qobuz_service.httpx, "request", lambda *args, **kwargs: Response())
+    client = qobuz_service.QobuzSidecarClient(
+        "http://qobuz-sidecar.invalid", "test-sidecar-token"
     )
 
-    with pytest.raises(QobuzAuthError):
-        qobuz_service.create_qobuz_client()
+    with pytest.raises(QobuzProviderError) as captured:
+        client.connect()
+    assert "provider-token" not in str(captured.value)
 
 
 # --- worker task --------------------------------------------------------------------
@@ -766,6 +1078,9 @@ def test_qobuz_fetch_missing_end_to_end(
     assert result["phase"] == "completed"
     assert result["downloads"]["total_missing"] == 2
     assert result["downloads"]["downloaded"] == 2
+    assert result["downloads"]["processed"] == 2
+    assert result["downloads"]["stored"] == 2
+    assert {item["status"] for item in result["downloads"]["items"]} == {"stored"}
     assert result["downloads"]["failed"] == 0
     assert len(result["import"]["imported"]) == 2
     assert result["scan"]["status"] == "completed"
@@ -792,6 +1107,11 @@ def test_qobuz_fetch_missing_end_to_end(
     assert statuses.count(MatchStatus.missing) == 1
     ready_matches = [m for m in matches if m.status == MatchStatus.ready]
     assert all(match.track_id is not None for match in ready_matches)
+    attempts = check.scalars(
+        select(ProviderAttempt).where(ProviderAttempt.provider == "qobuz")
+    ).all()
+    assert len(attempts) == 2
+    assert {attempt.status for attempt in attempts} == {"stored"}
     check.close()
 
 

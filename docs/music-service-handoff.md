@@ -1,6 +1,6 @@
 # Music Service MVP: handoff для новых чатов
 
-Актуально на: 2026-08-09
+Актуально на: 2026-08-10
 Статус: MVP acceptance завершён; Release 2 не начат.
 Опорная версия: `v0.1.0` (создаётся после итогового коммита handoff).
 
@@ -19,7 +19,7 @@
 ## 2. Что реализовано
 
 - Docker Compose: PostgreSQL, Redis, FastAPI, Celery, Nginx/PWA.
-- Alembic: `0003_stage4_matching (head)`.
+- Alembic: `0004_provider_attempts (head)`.
 - Read-only монтирование реальной библиотеки через
   `MUSIC_LIBRARY_HOST_PATH`; локально используется `X:/Music`.
 - Сканер lossless-файлов с тегами, SHA-1, идемпотентностью,
@@ -42,7 +42,7 @@
 | `docker compose build` | Успешно для backend/worker/migrate/frontend |
 | Docker services | backend/frontend/worker running; PostgreSQL/Redis healthy |
 | Celery | worker ping: `pong` |
-| Alembic | current = heads = `0003_stage4_matching` |
+| Alembic | current = heads = `0004_provider_attempts` |
 | Music mount | backend и worker: `X:/Music` → `/music/library`, `RW=false` |
 | Pytest | `138 passed` с live-PWA, без skip |
 | HTTPS/auth | health/login `200`, cookie `Secure; HttpOnly` |
@@ -83,16 +83,24 @@ docker compose run --rm `
 3. Tailscale и его Serve-конфигурация установлены на Windows-хосте,
    а не хранятся в репозитории. Точный HTTPS URL получается из
    `tailscale status`; не добавлять его в публичную документацию.
-4. Qobuz интегрирован на условиях **RESTRICT** из
-   `docs/qobuz-dl-assessment.md`: секреты только через env, скачивание только в
-   staging, перенос в библиотеку после верификации и только из worker, один
-   активный qobuz-job, лимиты и задержки. Live-проверка выполнена 2026-08-09:
-   классический логин email+пароль Qobuz отклоняет (переход на OAuth), поэтому
-   авторизация — токеном браузерной сессии (`QOBUZ_AUTH_TOKEN`/`QOBUZ_USER_ID`,
-   addendum раздел 8 assessment-документа). С токеном подтверждены `user/get`
-   (тариф Studio), поиск и реальное скачивание 24/96 FLAC с верификацией и
-   переносом в библиотеку. Осталось проверить в Docker: `docker compose up
-   --build` и fetch-missing на реальной библиотеке.
+4. Qobuz-интеграция из соседней ветки прошла отдельную hardening-итерацию на
+   условиях **RESTRICT** из `docs/qobuz-dl-assessment.md`. `qobuz-dl` и provider
+   token находятся только в изолированном sidecar без БД/Redis/локальной
+   библиотеки; его HTTPS идёт через точный allowlist proxy. Парольный fallback
+   удалён. Worker получает только относительные staging paths, повторно
+   проверяет audio/containment и лишь затем переносит файл в библиотеку.
+   Автоматически выбираются только однозначные записи; ambiguity и несовпавшие
+   version markers не скачиваются. Tier 27 запрашивает максимум и понижается до
+   лучшего реально доступного качества. Воспроизводимая проверка и завершённый
+   live provider gate зафиксированы в `docs/qobuz-hardening-acceptance.md`.
+5. Acquisition через Яндекс.Музыку реализован с политикой best available:
+   FLAC предпочтителен, FLAC-in-MP4 перепаковывается без перекодирования, а при
+   отсутствии FLAC сохраняется исходный AAC/HE-AAC или MP3. Track id,
+   transport, codec, HTTPS-host, контейнер и длительность проверяются до
+   импорта. Scanner поддерживает `.m4a`, `.aac`, `.mp3`; PWA показывает
+   фактический codec/bitrate. Подробности —
+   `docs/yandex-music-api-assessment.md` и
+   `docs/yandex-acquisition-acceptance.md`.
 
 ## 5. Операционный минимум
 
@@ -115,8 +123,14 @@ docker compose exec -T worker celery -A app.workers.celery_app.celery inspect pi
 - `APP_AUTH_TOKEN`;
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`;
 - `YANDEX_TOKEN`;
-- `QOBUZ_ENABLED`, `QOBUZ_EMAIL`, `QOBUZ_PASSWORD` (опционально, см. раздел
-  «Qobuz» в README и `docs/qobuz-dl-assessment.md`);
+- `YANDEX_DOWNLOAD_ENABLED`, `YANDEX_SIGNER_URL`, `YANDEX_INTERNAL_TOKEN`,
+  `YANDEX_STAGING_PATH`,
+  `YANDEX_MAX_TRACKS_PER_RUN`, `YANDEX_REQUEST_DELAY_SECONDS`,
+  `YANDEX_BATCH_DELAY_SECONDS` (опционально, см. раздел
+  «Яндекс.Музыка: докачка» в README);
+- `QOBUZ_ENABLED`, `QOBUZ_AUTH_TOKEN`, `QOBUZ_USER_ID`,
+  `QOBUZ_INTERNAL_TOKEN` (опционально, см. раздел «Qobuz» в README и
+  `docs/qobuz-dl-assessment.md`);
 - `MUSIC_LIBRARY_HOST_PATH`, `QOBUZ_STAGING_HOST_PATH`;
 - `AUTH_COOKIE_SECURE`;
 - PostgreSQL/Redis settings.
@@ -134,24 +148,52 @@ Amperfy/desktop и выбранный минимальный API-профиль.
 
 ### 6.2 `qobuz-dl` assessment
 
-Выполнен. Audit — `docs/qobuz-dl-assessment.md`, решение **RESTRICT**. Интеграция
-реализована в рамках этих ограничений (2026-08-09):
+Выполнен и усилен после review соседней ветки. Audit —
+`docs/qobuz-dl-assessment.md`, решение **RESTRICT**. Реализация (2026-08-09):
 
-- `backend/app/services/qobuz.py` — ленивая обёртка над `qobuz-dl==0.9.9.10`
-  (клиент с Redis-кэшем bundle, поиск, fuzzy-выбор кандидата, скачивание в
-  staging, верификация mutagen, перенос в библиотеку без перезаписи);
+- `qobuz_sidecar/` — отдельный non-root образ с hash-locked
+  `qobuz-dl==0.9.9.10`, token-only auth, обязательными timeout/size limit и
+  CONNECT-proxy с точным Qobuz allowlist;
+- `backend/app/services/qobuz.py` — приватный sidecar-клиент, каскад
+  ISRC → exact → strict fuzzy, защита version markers/ambiguity, повторная
+  Mutagen/containment-проверка и перенос без перезаписи;
 - `backend/app/api/qobuz.py` — `status`/`connect`/`search`/`download-url`/
-  `fetch-missing`, активен только один qobuz-job;
+  `fetch-missing`/`download-status/{playlist_id}`; один активный qobuz-job,
+  только точный повтор идемпотентен, конфликтующий запрос получает 409;
+- Qobuz включается серверной конфигурацией на всё время работы стека; PWA
+  показывает `включён постоянно` и не предлагает фиктивное ручное подключение;
 - `qobuz_download_task` в `backend/app/workers/tasks.py` — pipeline
   staging → verify → library → scan → matching с lease/heartbeat/retry-паттерном
-  остальных тасок; ошибки конфигурации/авторизации — без retry;
-- `docker-compose.yml`: staging-mount обоим сервисам, `/music/library` rw
-  только у `worker` (backend остаётся read-only);
-- тесты `backend/tests/test_qobuz.py` — моки на границе сервиса, end-to-end
-  fetch-missing на сгенерированных FLAC; реальный логин Qobuz не проверялся
-  (нужны `QOBUZ_EMAIL`/`QOBUZ_PASSWORD`, см. п. 4).
+  остальных тасок; этапы и per-track статусы сохраняются в `jobs.payload` и
+  восстанавливаются PWA после reload; ошибки конфигурации/авторизации — без retry;
+- `provider_attempts` (`0004_provider_attempts`) хранит терминальный результат
+  по `provider + fingerprint`: Qobuz не перепроверяет уже обработанное, а один
+  запуск проходит все новые MISSING пачками по 25 с паузой между пачками;
+- `docker-compose.yml`: staging видят sidecar и worker, `/music/library` rw
+  только у worker, backend остаётся read-only и provider token не получает;
+- тесты `backend/tests/test_qobuz.py` и `qobuz_sidecar/test_app.py`, включая
+  end-to-end fetch-missing на сгенерированном FLAC и сетевую изоляцию.
 
-### 6.3 Release 2
+### 6.3 Яндекс.Музыка как второй provider
+
+Реализована 2026-08-10 как отдельная итерация, не Release 2. Итог:
+best-available acquisition **принят с ограничениями**:
+
+- audit upstream и security boundary — `docs/yandex-music-api-assessment.md`;
+- Docker/live-приёмка — `docs/yandex-acquisition-acceptance.md`;
+- стабильный `yandex-music==3.0.*` остаётся для импорта/поиска;
+- подписанный lossless file-info изолирован в non-root `yandex-signer` без
+  OAuth token, egress и опубликованного порта;
+- worker предпочитает native FLAC/FLAC-in-MP4; MP4 перепаковывается stream
+  copy в `.flac`, а при отсутствии FLAC исходный AAC/HE-AAC или MP3 сохраняется
+  без транскодирования;
+- независимый provider ledger, полный проход плейлиста пачками по 25 и
+  per-track job progress сохранены;
+- repository default выключен; локальный тестовый стек включён и прошёл
+  финальный Docker/PWA-прогон `203 passed` плюс staging-only live FLAC и AAC
+  acceptance.
+
+### 6.4 Release 2
 
 Начинать только после отдельного явного указания. Scope зафиксирован в
 `docs/music-service-mvp-plan.md`: tracker scraper, qBittorrent automation, scheduled rematching,
@@ -167,6 +209,8 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 - `e8f11c2` — prune missing library files.
 - `19b1a7e` — OpenSubsonic research plan.
 - `833407d`, `aad1384` — `qobuz-dl` assessment gate and scope decision.
+- `b317757` — merge соседней ветки с исходным Qobuz-прототипом; hardening
+  выполняется отдельно в `codex/qobuz-hardening`.
 
 ## 8. Короткий prompt для нового чата
 

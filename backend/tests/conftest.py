@@ -19,10 +19,11 @@ os.environ["MUSICBRAINZ_ENABLED"] = "false"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "false"
 # Isolate tests from a real local .env (Qobuz credentials must never leak in).
 os.environ["QOBUZ_ENABLED"] = "false"
-os.environ["QOBUZ_AUTH_TOKEN"] = ""
-os.environ["QOBUZ_USER_ID"] = ""
-os.environ["QOBUZ_EMAIL"] = ""
-os.environ["QOBUZ_PASSWORD"] = ""
+os.environ["QOBUZ_SIDECAR_URL"] = "http://qobuz-sidecar.invalid"
+os.environ["QOBUZ_INTERNAL_TOKEN"] = "test-qobuz-internal-token"
+os.environ["YANDEX_DOWNLOAD_ENABLED"] = "false"
+os.environ["YANDEX_SIGNER_URL"] = "http://yandex-signer:8091"
+os.environ["YANDEX_INTERNAL_TOKEN"] = "test-yandex-internal-token"
 
 from app.db import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402

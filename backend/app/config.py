@@ -23,54 +23,51 @@ class Settings(BaseSettings):
     spotify_oauth_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=3600)
 
     yandex_token: str = ""
+    # Lossless file-info signing is isolated in an internal sidecar. The
+    # Python app keeps the OAuth token, validates FLAC and never accepts lossy
+    # fallback responses.
+    yandex_download_enabled: bool = False
+    yandex_signer_url: str = "http://yandex-signer:8091"
+    yandex_internal_token: str = ""
+    yandex_staging_path: str = "/music/staging/yandex"
+    yandex_max_tracks_per_run: int = Field(default=25, ge=1, le=500)
+    yandex_request_delay_seconds: float = Field(default=1.0, ge=0)
+    yandex_batch_delay_seconds: float = Field(default=30.0, ge=0, le=3600)
+    yandex_download_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
+    yandex_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    yandex_read_timeout_seconds: float = Field(default=5 * 60, ge=30, le=3600)
+    yandex_max_file_bytes: int = Field(default=512 * 1024 * 1024, ge=1024 * 1024)
 
-    # Qobuz downloads run under the RESTRICT rules of docs/qobuz-dl-assessment.md.
-    #
-    # Все поля настраиваются через env (секреты только здесь — assessment §5,
-    # §7: в БД ничего не пишем, API секреты не возвращает).
-
-    # Главный выключатель интеграции. По умолчанию выключена: пакет и
-    # креденшелы активируются только осознанным действием владельца.
+    # Qobuz downloads run under the RESTRICT rules of
+    # docs/qobuz-dl-assessment.md. The main application receives no provider
+    # credential and communicates only with the private sidecar API.
     qobuz_enabled: bool = False
-    # Fallback-авторизация (email + пароль). Пароль наружу уходит только как
-    # MD5-хеш по HTTPS — ровно как делает CLI апстрима (assessment §3.1).
-    # Сейчас обычно пустые: классический user/login у Qobuz сломан (см. ниже).
-    qobuz_email: str = ""
-    qobuz_password: str = ""
-    # Browser session token workaround: Qobuz moved login to OAuth, so the
-    # classic email+password user/login flow of qobuz-dl can return 401 even
-    # with valid credentials. A user_auth_token extracted from play.qobuz.com
-    # localStorage works instead (docs/qobuz-dl-assessment.md, addendum).
-    #
-    # Основной способ авторизации (addendum, раздел 8 assessment): токен
-    # браузерной сессии и id пользователя из Local Storage play.qobuz.com
-    # (ключ localuser). Токен — секрет того же класса, что пароль: только
-    # .env, не логируется, не возвращается API. Протухает со временем —
-    # признак: 400/401 от connect/search, лечение: повторное извлечение.
-    qobuz_auth_token: str = ""
-    qobuz_user_id: str = ""
+    qobuz_sidecar_url: str = "http://qobuz-sidecar:8090"
+    qobuz_internal_token: str = ""
     # 5=MP3, 6=16/44.1, 7=24/<96kHz, 27=24/>96kHz (falls back to availability)
     #
     # Запрошенное качество скачивания. 27 (24 бит / >96 кГц) по умолчанию —
     # максимум Hi-Res; при недоступности релиза в этом качестве downloader
-    # работает с downgrade_quality=True и берёт лучшее доступное.
+    # работает с downgrade_quality=True, но worker импортирует только FLAC.
     qobuz_quality: int = 27
     # Каталог staging внутри контейнера (bind-mount QOBUZ_STAGING_HOST_PATH).
     # Скачанное пишется ТОЛЬКО сюда; в библиотеку — после верификации
-    # (assessment §3.5, §7 п. 3).
+    # (assessment sections 2 and 6).
     qobuz_staging_path: str = "/music/staging"
-    # Анти-бан лимиты (assessment §5, §7 п. 4): не более N треков за один
-    # запуск fetch-missing и пауза между скачиваниями, чтобы не выглядеть
-    # как скрапер. 25 треков и 1 секунда — консервативные дефолты.
+    # Operational limits (assessment section 7): весь плейлист проходит одним
+    # sweep, разбитым на пакеты по N треков. Между запросами и пакетами есть
+    # отдельные паузы, чтобы не выглядеть как скрапер.
     qobuz_max_tracks_per_run: int = Field(default=25, ge=1, le=500)
     qobuz_request_delay_seconds: float = Field(default=1.0, ge=0)
-    # Stale-таймаут задания докачки: если heartbeat молчит дольше, API
-    # считает job зависшим (у qobuz-dl есть requests-вызовы без timeout —
-    # assessment §3.3, дефект 1) и помечает failed.
+    qobuz_batch_delay_seconds: float = Field(default=30.0, ge=0, le=3600)
+    # Stale timeout remains a second line of defence after the sidecar's
+    # mandatory connect/read timeouts.
     qobuz_download_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)
     # Встраивать обложку альбома в теги FLAC/MP3 (mutagen, внутри файла —
-    # никаких посторонних запросов кроме static.qobuz.com, assessment §3.4).
+    # никаких посторонних запросов кроме static.qobuz.com; assessment section 4).
     qobuz_embed_art: bool = True
+    qobuz_sidecar_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    qobuz_sidecar_read_timeout_seconds: float = Field(default=15 * 60, ge=30, le=3600)
 
     musicbrainz_enabled: bool = True
     musicbrainz_base_url: str = "https://musicbrainz.org/ws/2"

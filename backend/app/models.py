@@ -234,3 +234,28 @@ class Job(Base):
             ),
         ),
     )
+
+
+class ProviderAttempt(Base):
+    """One terminal lookup outcome per provider and stable track identity."""
+
+    __tablename__ = "provider_attempts"
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(32), nullable=False)
+    lookup_key = Column(String(64), nullable=False)
+    playlist_item_id = Column(
+        ForeignKey("playlist_items.id", ondelete="SET NULL"), nullable=True
+    )
+    job_id = Column(ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(32), nullable=False)
+    provider_item_id = Column(String(128))
+    selection_method = Column(String(32))
+    error_code = Column(String(128))
+    attempted_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "lookup_key", name="uq_provider_attempts_provider_lookup"
+        ),
+        Index("ix_provider_attempts_playlist_item", "playlist_item_id"),
+    )

@@ -19,9 +19,11 @@ PWA открывается на `http://localhost:8080`.
 
 Миграция выполняется отдельным сервисом `migrate` до запуска API и Celery.
 Локальная библиотека `data/music/` монтируется в `/music/library`: backend —
-только для чтения, worker — с записью (нужно для Qobuz-импорта, см. раздел
-«Qobuz»). Staging Qobuz-загрузок `data/qobuz-staging/` монтируется в
-`/music/staging` обоим сервисам.
+только для чтения, worker — с записью (нужно для provider-импорта, см. разделы
+«Qobuz» и «Яндекс.Музыка: докачка»). Общий staging
+`data/qobuz-staging/` доступен только изолированному Qobuz-sidecar и worker;
+backend его не видит. Яндекс-загрузки используют вложенный каталог
+`/music/staging/yandex`.
 
 ## Миграции
 
@@ -42,8 +44,8 @@ SameSite-cookie. Bearer-аутентификация для API остаётся
 - `GET /api/library/stats` — файлы, треки, альбомы, объём и форматы;
 - `GET /api/library/albums?q=` — поиск альбомов и исполнителей.
 
-Сканер поддерживает `.flac`, `.alac`, `.wav`, `.dsf`, `.dff`, `.ape`, читает
-теги Mutagen и использует fallback
+Сканер поддерживает `.flac`, `.alac`, `.wav`, `.dsf`, `.dff`, `.ape`, а также
+Yandex fallback-контейнеры `.m4a`, `.aac`, `.mp3`; читает теги Mutagen и использует fallback
 `Artist/Album (Year)/NN - Title.ext`. Дедупликация файлов выполняется по SHA-1.
 
 ## Источники и плейлисты
@@ -116,55 +118,82 @@ Worker кэширует только оболочку приложения; API 
 
 ## Qobuz
 
-Докачка отсутствующих (MISSING) треков из каталога Qobuz через библиотеку
-`qobuz-dl==0.9.9.10`. Интеграция выполнена на условиях **RESTRICT** — обязательно
-прочитайте `docs/qobuz-dl-assessment.md` (угрозы, правовой аспект, ограничения
-из раздела 7) до включения. Требуется активная платная подписка Qobuz Studio;
-риск блокировки аккаунта несёт владелец.
+Докачка отсутствующих (`MISSING`) треков из каталога Qobuz. Неофициальная
+библиотека `qobuz-dl==0.9.9.10` запускается только в изолированном sidecar:
+без базы, Redis, Docker socket и локальной библиотеки, с hash-locked
+зависимостями и точным egress allowlist. Условия **RESTRICT**, остаточные риски
+и границы доверия описаны в `docs/qobuz-dl-assessment.md`.
 
 Переменные окружения (`.env`):
 
+Qobuz подключается на уровне серверной конфигурации и остаётся активным всё
+время работы стека. PWA не требует ручного подключения: при заполненной
+конфигурации карточка источника показывает `включён постоянно`. Endpoint
+`POST /api/qobuz/connect` сохранён только как диагностическая проверка токена.
+
 - `QOBUZ_ENABLED=true` — включает интеграцию (по умолчанию выключена);
-- `QOBUZ_AUTH_TOKEN`, `QOBUZ_USER_ID` — **основной способ авторизации**: токен
-  браузерной сессии. Qobuz перевёл вход на OAuth, и классический логин
-  email+пароль в qobuz-dl отвечает 401 даже с верными данными (проверено
-  2026-08-09, см. addendum в `docs/qobuz-dl-assessment.md`). Как получить:
+- `QOBUZ_AUTH_TOKEN`, `QOBUZ_USER_ID` — единственный способ авторизации. Как
+  получить:
   войти на `play.qobuz.com` → DevTools → Application → Local Storage → ключ
   `localuser` → поля `token` и `id`. Токен живёт только в `.env`: в БД не
   сохраняется, API его не возвращает. Если connect/search начнут отвечать
   400/401 — токен протух, повторите извлечение;
-- `QOBUZ_EMAIL`, `QOBUZ_PASSWORD` — запасной путь на случай, если Qobuz снова
-  починит `user/login`; наружу уходит лишь MD5-хеш пароля по HTTPS;
-- `QOBUZ_QUALITY` — `5` (MP3), `6` (16/44.1), `7` (24/<96 kHz),
-  `27` (24/>96 kHz, по умолчанию) с автоматическим downgrade до доступного;
+- `QOBUZ_INTERNAL_TOKEN` — отдельный случайный длинный токен приватного API
+  sidecar; он не должен совпадать с `APP_AUTH_TOKEN`;
+- `QOBUZ_QUALITY` — `6` (16/44.1), `7` (24/<96 kHz),
+  `27` (24/>96 kHz, по умолчанию) с downgrade только между lossless-tier;
+  MP3 tier `5` не допускается к импорту;
 - `QOBUZ_STAGING_PATH` (в контейнере `/music/staging`) и
   `QOBUZ_STAGING_HOST_PATH` (на хосте `./data/qobuz-staging`);
-- `QOBUZ_MAX_TRACKS_PER_RUN` (по умолчанию 25) — лимит треков за один запуск;
+- `QOBUZ_MAX_TRACKS_PER_RUN` (по умолчанию 25) — размер внутренней пачки;
 - `QOBUZ_REQUEST_DELAY_SECONDS` (по умолчанию 1.0) — пауза между скачиваниями;
+- `QOBUZ_BATCH_DELAY_SECONDS` (по умолчанию 30) — пауза между пачками;
 - `QOBUZ_DOWNLOAD_JOB_STALE_SECONDS` — stale-таймаут задания (по умолчанию
   21600);
-- `QOBUZ_EMBED_ART` — встраивать обложку в теги файла.
+- `QOBUZ_EMBED_ART` — встраивать обложку в теги файла;
+- `QOBUZ_CONNECT_TIMEOUT_SECONDS`, `QOBUZ_READ_TIMEOUT_SECONDS` и
+  `QOBUZ_MAX_FILE_BYTES` — сетевые и размерные границы sidecar.
 
 Endpoints (все требуют авторизации):
 
 - `GET /api/qobuz/status` — `enabled`/`configured`/лимиты, без секретов;
-- `POST /api/qobuz/connect` — проверка логина; при успехе возвращает `label`
-  тарифа (`400` — креденшелы отклонены, `502` — Qobuz недоступен, `503` — не
+- `POST /api/qobuz/connect` — проверка токена; при успехе возвращает `label`
+  тарифа (`400` — токен отклонён, `502` — Qobuz недоступен, `503` — не
   настроен);
 - `GET /api/qobuz/search?q=&type=track|album&limit=` — поиск по каталогу Qobuz;
+- `GET /api/qobuz/download-status/{playlist_id}` — последний сохранённый
+  прогресс Qobuz-загрузки плейлиста, включая этап job и статусы отдельных
+  треков;
 - `POST /api/qobuz/download-url` с `{ "url": "https://play.qobuz.com/..." }` —
   скачивание по ссылке; в MVP поддерживаются только URL типа `album` и `track`
   (playlist/artist/label отклоняются с понятной ошибкой);
-- `POST /api/qobuz/fetch-missing` с `{ "playlist_id": N }` — докачка всех
-  MISSING-треков плейлиста (не более `QOBUZ_MAX_TRACKS_PER_RUN` за запуск).
+- `GET /api/qobuz/download-eligibility/{playlist_id}` — сколько MISSING-треков
+  ещё не проверялись в Qobuz;
+- `POST /api/qobuz/fetch-missing` с `{ "playlist_id": N }` — один полный проход
+  всех ещё не проверенных MISSING-треков плейлиста пачками по
+  `QOBUZ_MAX_TRACKS_PER_RUN`.
 
 Оба download-endpoint возвращают `202` и задание (`GET /api/jobs/{id}`).
 Одновременно активно только одно qobuz-задание: повторный запрос вернёт уже
-идущее.
+идущее, только если это точный идемпотентный повтор; конфликтующий запрос
+получит `409` и id активного задания.
+
+Прогресс хранится в `jobs.payload` и не теряется при обновлении страницы.
+PWA показывает этапы `downloading → importing → scanning → matching`, счётчики
+текущего пакета и статусы треков: `queued`, `searching`, `downloading`,
+`stored`, `not_found`, `ambiguous`, `conflict` или `failed`. При кратком обрыве
+API интерфейс переподключается и продолжает следить за той же job.
+
+Терминальный результат проверки записывается в `provider_attempts` по паре
+`provider + SHA-256 fingerprint` трека. Поэтому один источник не получает
+повторный запрос для уже проверенного трека, одинаковые треки в разных
+плейлистах дедуплицируются, а будущий другой provider сможет проверить тот же
+трек независимо. Результат `stored`/`conflict` блокирует повторное скачивание
+из любого источника, даже если автоматический matching ещё не связал файл.
 
 Pipeline задания: `staging → верификация → библиотека → scan → matching`.
 Скачанное никогда не пишется в `MUSIC_LIBRARY_PATH` напрямую: файлы сначала
-попадают в staging, проверяются (расширение `.flac`/`.mp3`, mutagen парсит и
+попадают в staging, проверяются (только `.flac`, mutagen парсит и
 видит ненулевую длительность, размер > 0), затем worker переносит их в
 библиотеку с сохранением структуры папок и containment-проверкой путей.
 Существующие файлы не перезаписываются — конфликт остаётся в staging;
@@ -173,13 +202,47 @@ Pipeline задания: `staging → верификация → библиот�
 `deferred`, а matching пропускается) и, для fetch-missing, повторный матчинг
 плейлиста. Из-за записи в библиотеку **только** контейнер `worker` получил
 read-write mount `/music/library`; backend остаётся read-only
-(обоснование — раздел 5 assessment-документа).
+(обоснование — разделы 2 и 6 assessment-документа).
 
-Ошибки учётных данных (`QobuzConfigurationError`/`QobuzAuthError`) завершают
-задание без retry; прочие ошибки — с retry по тому же паттерну, что и остальные
-Celery-задачи. `app_id`/secrets веб-плеера кэшируются в Redis
-(`qobuz:bundle:v1`, TTL 7 дней) и перевытягиваются только при промахе или
-`InvalidAppSecretError`; при недоступном Redis работа продолжается без кэша.
+Автовыбор консервативен: ISRC имеет приоритет, затем идут точные metadata и
+строгий fuzzy с контролем длительности/версии/отрыва. `live`, `remix`, `cover`,
+`acoustic`, `instrumental`, `radio edit` и `remaster` не смешиваются. Если две
+разные записи остаются равновероятными, трек помечается `ambiguous` и не
+скачивается. Для одной и той же записи выбирается лучшее опубликованное
+качество, а запрос tier `27` автоматически понижается лишь до реально
+доступного.
+
+Ошибки конфигурации/токена завершают задание без retry; временные provider/
+network ошибки имеют не более двух retry. `app_id`/signing secrets веб-плеера
+кэшируются только в памяти sidecar и перевытягиваются после ошибки подписи.
+
+## Яндекс.Музыка: lossless-докачка
+
+[`yandex-music`](https://github.com/MarshalX/yandex-music-api) `3.0.*` отвечает
+за импорт плейлистов, поиск и метаданные. Lossless file-info подписывает
+отдельный `yandex-signer`, собранный из фиксированного upstream commit. Signer
+не получает OAuth token, не имеет внешней сети и не публикует порт на хост.
+
+Worker всегда запрашивает лучший вариант. Native FLAC сохраняется напрямую,
+FLAC-in-MP4 перепаковывается в `.flac` через `ffmpeg -c:a copy`, то есть без
+повторного кодирования. Если FLAC для трека недоступен, исходный AAC/HE-AAC или
+MP3 сохраняется без транскодирования. Другой track id, неизвестный codec,
+transport или host по-прежнему отклоняются.
+
+Безопасный default — `YANDEX_DOWNLOAD_ENABLED=false`. Для включения нужны
+подключённый источник Яндекса и `YANDEX_INTERNAL_TOKEN` минимум 16 символов,
+отдельный от `APP_AUTH_TOKEN`. `YANDEX_SIGNER_URL` внутри Compose уже указывает
+на `http://yandex-signer:8091`.
+
+Один запуск проверяет весь список eligible MISSING-треков пачками по
+`YANDEX_MAX_TRACKS_PER_RUN` (по умолчанию 25), выдерживает
+`YANDEX_BATCH_DELAY_SECONDS` между пачками и сохраняет per-track прогресс в
+job. Терминальная попытка Яндекса не повторяется тем же provider, но не мешает
+Qobuz или будущему отдельному источнику.
+
+Недокументированный API может измениться без предупреждения. Audit,
+ограничения и живая проверка: `docs/yandex-music-api-assessment.md` и
+`docs/yandex-acquisition-acceptance.md`.
 
 ## MusicBrainz
 
@@ -194,14 +257,16 @@ Celery-задачи. `app_id`/secrets веб-плеера кэшируются �
 docker compose run --rm backend pytest -q
 ```
 
-Тесты генерируют три коротких FLAC через ffmpeg, проверяют повторный скан,
+Тесты генерируют короткие аудиофайлы через ffmpeg, проверяют повторный скан,
 fallback, SHA-1-дедупликацию, API, MusicBrainz, Spotify и Яндекс.Музыку с
 моками, каскад matcher, ручной review, Range и содержимое ZIP/M3U8. Qobuz
-тестируется с моками клиента/скачивания на границе сервиса (Redis-кэш bundle
-подменяется FakeRedis), включая end-to-end сценарий fetch-missing → staging →
-верификация → библиотека → scan → matching на сгенерированных FLAC. Реальная
-проверка внешних музыкальных API выполняется отдельно после настройки ключей и
-токенов.
+тестируется на границе приватного sidecar, включая строгий выбор записи и
+end-to-end сценарий fetch-missing → staging → верификация → библиотека → scan
+→ matching на сгенерированных FLAC. Яндекс-тесты проверяют signed contract,
+подмену track id, native FLAC, stream-copy перепаковку FLAC-in-MP4, AAC/MP3
+fallback без транскодирования, полный batching и общий import/scan/matching pipeline.
+Sidecar отдельно проверяет allowlist,
+лимит размера, очистку partial-файла и отсутствие секретов в status.
 
 ## Структура
 
@@ -211,17 +276,24 @@ fallback, SHA-1-дедупликацию, API, MusicBrainz, Spotify и Янде�
 - `backend/app/services/musicbrainz.py` — внешнее обогащение и Redis-кэш
 - `backend/app/services/spotify.py` — OAuth, refresh токенов и импорт Spotify
 - `backend/app/services/yandex.py` — импорт Яндекс.Музыки
-- `backend/app/services/qobuz.py` — обёртка qobuz-dl: клиент, поиск, staging,
-  верификация и импорт в библиотеку
+- `backend/app/services/yandex_acquisition.py` — Yandex provider: signed
+  file-info, FLAC preference, AAC/MP3 fallback, staging и batching
+- `backend/app/services/qobuz.py` — клиент приватного sidecar, строгий выбор
+  записи, повторная верификация staging и безопасный импорт
 - `backend/app/services/normalize.py` — единые нормализованные ключи
 - `backend/app/services/matcher.py` — каскад сопоставления и review-кандидаты
 - `backend/app/services/delivery.py` — безопасная bit-perfect выдача
-- `backend/app/workers/` — Celery-задачи (scan/import/matching/qobuz_download)
+- `backend/app/workers/` — Celery-задачи
+  (scan/import/matching/qobuz_download/yandex_download)
 - `frontend/` — адаптивная PWA и Nginx reverse proxy
+- `qobuz_sidecar/` — изолированный адаптер `qobuz-dl` и egress allowlist proxy
+- `yandex_signer/` — изолированный sign-only wrapper без OAuth token и egress
 - `data/music/` — музыкальная библиотека (mount `/music/library`)
 - `data/qobuz-staging/` — staging Qobuz-загрузок (mount `/music/staging`)
 - `docs/music-service-handoff.md` — проверенное состояние MVP и следующие итерации
 - `docs/qobuz-dl-assessment.md` — security/terms/code audit интеграции Qobuz
+- `docs/yandex-music-api-assessment.md` — audit и ограничения lossless flow
+- `docs/yandex-acquisition-acceptance.md` — Docker/live-приёмка Яндекса
 
 Этап 4 завершает функциональный scope MVP из
 `docs/music-service-mvp-plan.md`. Реальная MVP-приёмка Spotify/Яндекс API,

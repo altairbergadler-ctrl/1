@@ -220,6 +220,13 @@ class QobuzStatusOut(BaseModel):
     configured: bool
     quality: int
     max_tracks_per_run: int
+    batch_delay_seconds: float
+
+
+class QobuzDownloadEligibilityOut(BaseModel):
+    total_missing: int
+    eligible: int
+    already_checked: int
 
 
 class QobuzConnectOut(BaseModel):
@@ -248,4 +255,23 @@ class QobuzDownloadUrlIn(BaseModel):
 
 
 class QobuzFetchMissingIn(BaseModel):
+    playlist_id: int = Field(gt=0)
+
+
+class YandexDownloadStatusOut(BaseModel):
+    enabled: bool
+    configured: bool
+    supported_codecs: list[str]
+    lossless_supported: bool
+    max_tracks_per_run: int
+    batch_delay_seconds: float
+
+
+class YandexDownloadEligibilityOut(BaseModel):
+    total_missing: int
+    eligible: int
+    already_checked: int
+
+
+class YandexFetchMissingIn(BaseModel):
     playlist_id: int = Field(gt=0)

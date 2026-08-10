@@ -1,7 +1,16 @@
 from fastapi import FastAPI
 
 from app.api import auth as auth_api
-from app.api import download, jobs, library, matching, playlists, qobuz, sources
+from app.api import (
+    download,
+    jobs,
+    library,
+    matching,
+    playlists,
+    qobuz,
+    sources,
+    yandex_download,
+)
 from app.schemas import HealthOut
 
 app = FastAPI(title="Music Service MVP", version="0.4.0")
@@ -23,3 +32,8 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 # MISSING-треков и скачивание по ссылкам. Роутер подключается последним —
 # опциональная надстройка над базовым контуром сервиса.
 app.include_router(qobuz.router, prefix="/api/qobuz", tags=["qobuz"])
+app.include_router(
+    yandex_download.router,
+    prefix="/api/yandex-download",
+    tags=["yandex-download"],
+)
