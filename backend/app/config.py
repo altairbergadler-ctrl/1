@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     spotify_oauth_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=3600)
 
     yandex_token: str = ""
+    provider_credential_key_file: str = "/run/secrets/provider_credential_key"
+    qobuz_credential_key_file: str = "/run/secrets/qobuz_credential_key"
+    provider_health_interval_seconds: int = Field(default=30 * 60, ge=60)
+    provider_health_stale_seconds: int = Field(default=90 * 60, ge=120)
+    provider_health_manual_cooldown_seconds: int = Field(default=60, ge=10)
     # Lossless file-info signing is isolated in an internal sidecar. The
     # Python app keeps the OAuth token, validates FLAC and never accepts lossy
     # fallback responses.
@@ -39,8 +44,9 @@ class Settings(BaseSettings):
     yandex_max_file_bytes: int = Field(default=512 * 1024 * 1024, ge=1024 * 1024)
 
     # Qobuz downloads run under the RESTRICT rules of
-    # docs/qobuz-dl-assessment.md. The main application receives no provider
-    # credential and communicates only with the private sidecar API.
+    # docs/qobuz-dl-assessment.md. The main application keeps no plaintext
+    # Qobuz credential in its environment and sends only an encrypted envelope
+    # to the private sidecar API.
     qobuz_enabled: bool = False
     qobuz_sidecar_url: str = "http://qobuz-sidecar:8090"
     qobuz_internal_token: str = ""

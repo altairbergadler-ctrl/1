@@ -22,6 +22,7 @@ from app.schemas import (
     YandexDownloadStatusOut,
     YandexFetchMissingIn,
 )
+from app.services.credentials import has_credential
 from app.services.yandex_acquisition import (
     YANDEX_LOSSLESS_AVAILABLE,
     yandex_download_eligibility,
@@ -36,7 +37,10 @@ def _source_configured(db: Session) -> bool:
     source = db.scalar(
         select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
     )
-    return bool(source is not None and str(source.access_token or "").strip())
+    return bool(
+        source is not None
+        and (has_credential(db, "yandex") or str(source.access_token or "").strip())
+    )
 
 
 def _signer_configured() -> bool:

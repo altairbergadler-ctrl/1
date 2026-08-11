@@ -32,7 +32,11 @@ services:
       QOBUZ_USER_ID: ""
       QOBUZ_EMAIL: ""
       QOBUZ_PASSWORD: ""
-    command: alembic upgrade head
+      YANDEX_TOKEN: ""
+      PROVIDER_CREDENTIAL_KEY_FILE: /run/secrets/provider_credential_key
+    command: sh -lc "alembic upgrade head && python -m app.commands.migrate_credentials"
+    secrets:
+      - provider_credential_key
     volumes:
       - ./backend:/code
     depends_on:
@@ -49,11 +53,17 @@ services:
       QOBUZ_USER_ID: ""
       QOBUZ_EMAIL: ""
       QOBUZ_PASSWORD: ""
+      YANDEX_TOKEN: ""
       QOBUZ_SIDECAR_URL: http://qobuz-sidecar:8090
       QOBUZ_INTERNAL_TOKEN: ${QOBUZ_INTERNAL_TOKEN:-}
       YANDEX_DOWNLOAD_ENABLED: ${YANDEX_DOWNLOAD_ENABLED:-false}
       YANDEX_SIGNER_URL: http://yandex-signer:8091
       YANDEX_INTERNAL_TOKEN: ${YANDEX_INTERNAL_TOKEN:-${QOBUZ_INTERNAL_TOKEN:-}}
+      PROVIDER_CREDENTIAL_KEY_FILE: /run/secrets/provider_credential_key
+      QOBUZ_CREDENTIAL_KEY_FILE: /run/secrets/qobuz_credential_key
+    secrets:
+      - provider_credential_key
+      - qobuz_credential_key
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/code
@@ -87,11 +97,15 @@ services:
       QOBUZ_USER_ID: ""
       QOBUZ_EMAIL: ""
       QOBUZ_PASSWORD: ""
+      YANDEX_TOKEN: ""
       QOBUZ_SIDECAR_URL: http://qobuz-sidecar:8090
       QOBUZ_INTERNAL_TOKEN: ${QOBUZ_INTERNAL_TOKEN:-}
       YANDEX_DOWNLOAD_ENABLED: ${YANDEX_DOWNLOAD_ENABLED:-false}
       YANDEX_SIGNER_URL: http://yandex-signer:8091
       YANDEX_INTERNAL_TOKEN: ${YANDEX_INTERNAL_TOKEN:-${QOBUZ_INTERNAL_TOKEN:-}}
+      PROVIDER_CREDENTIAL_KEY_FILE: /run/secrets/provider_credential_key
+    secrets:
+      - provider_credential_key
     command: celery -A app.workers.celery_app.celery worker --loglevel=INFO
     volumes:
       - ./backend:/code
@@ -118,6 +132,34 @@ services:
       - qobuz_control
       - yandex_control
 
+  beat:
+    build: ./backend
+    env_file: ${MUSIC_SERVICE_ENV_FILE:-.env}
+    environment:
+      APP_AUTH_TOKEN: ${APP_AUTH_TOKEN}
+      QOBUZ_AUTH_TOKEN: ""
+      QOBUZ_USER_ID: ""
+      QOBUZ_EMAIL: ""
+      QOBUZ_PASSWORD: ""
+      YANDEX_TOKEN: ""
+    command: celery -A app.workers.celery_app.celery beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - default
+
   yandex-signer:
     build:
       context: ./yandex_signer
@@ -142,9 +184,8 @@ services:
       context: ./qobuz_sidecar
       dockerfile: Dockerfile
     environment:
-      QOBUZ_AUTH_TOKEN: ${QOBUZ_AUTH_TOKEN:-}
-      QOBUZ_USER_ID: ${QOBUZ_USER_ID:-}
       QOBUZ_INTERNAL_TOKEN: ${QOBUZ_INTERNAL_TOKEN:-}
+      QOBUZ_CREDENTIAL_KEY_FILE: /run/secrets/qobuz_credential_key
       QOBUZ_STAGING_PATH: /music/staging
       QOBUZ_CONNECT_TIMEOUT_SECONDS: ${QOBUZ_CONNECT_TIMEOUT_SECONDS:-10}
       QOBUZ_READ_TIMEOUT_SECONDS: ${QOBUZ_READ_TIMEOUT_SECONDS:-120}
@@ -152,6 +193,8 @@ services:
       HTTPS_PROXY: http://qobuz-egress:3128
       HTTP_PROXY: http://qobuz-egress:3128
       NO_PROXY: 127.0.0.1,localhost
+    secrets:
+      - qobuz_credential_key
     volumes:
       - type: bind
         source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
@@ -198,6 +241,12 @@ services:
 
 volumes:
   pgdata:
+
+secrets:
+  provider_credential_key:
+    file: ${PROVIDER_CREDENTIAL_KEY_HOST_FILE:-./data/secrets/provider-credentials.key}
+  qobuz_credential_key:
+    file: ${QOBUZ_CREDENTIAL_KEY_HOST_FILE:-./data/secrets/qobuz-credentials.key}
 
 networks:
   qobuz_control:

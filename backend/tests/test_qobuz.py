@@ -20,6 +20,7 @@ from app.models import (
     ServiceEnum,
 )
 from app.services import qobuz as qobuz_service
+from app.services.credentials import save_credential
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
 from app.services.qobuz import (
     QobuzAuthError,
@@ -48,6 +49,7 @@ def _configure_qobuz(monkeypatch, *, enabled=True):
     monkeypatch.setattr(
         "app.config.settings.qobuz_internal_token", "test-sidecar-token" * 2
     )
+    monkeypatch.setattr("app.api.qobuz.has_credential", lambda _db, _provider: True)
 
 
 class FakeQobuzClient:
@@ -135,7 +137,7 @@ def test_status_reports_configured_without_leaking_secrets(
 def test_connect_success_returns_label(api_client, auth_headers, monkeypatch):
     _configure_qobuz(monkeypatch)
     monkeypatch.setattr(
-        "app.api.qobuz.create_qobuz_client", lambda: FakeQobuzClient()
+        "app.api.qobuz.create_qobuz_client", lambda _db: FakeQobuzClient()
     )
 
     response = api_client.post("/api/qobuz/connect", headers=auth_headers)
@@ -149,7 +151,7 @@ def test_connect_rejected_credentials_returns_400(
 ):
     _configure_qobuz(monkeypatch)
 
-    def raise_auth():
+    def raise_auth(_db):
         raise QobuzAuthError("rejected")
 
     monkeypatch.setattr("app.api.qobuz.create_qobuz_client", raise_auth)
@@ -233,7 +235,7 @@ def test_search_albums_maps_qobuz_response():
 def test_search_endpoint_maps_items(api_client, auth_headers, monkeypatch):
     _configure_qobuz(monkeypatch)
     client = FakeQobuzClient(tracks=[_track_payload(42, "First Track")])
-    monkeypatch.setattr("app.api.qobuz.create_qobuz_client", lambda: client)
+    monkeypatch.setattr("app.api.qobuz.create_qobuz_client", lambda _db: client)
 
     response = api_client.get(
         "/api/qobuz/search?q=tagged&type=track&limit=5", headers=auth_headers
@@ -256,7 +258,7 @@ def test_search_endpoint_provider_error_returns_502(
         def search_tracks(self, query, limit):
             raise RuntimeError("network down")
 
-    monkeypatch.setattr("app.api.qobuz.create_qobuz_client", lambda: BrokenClient())
+    monkeypatch.setattr("app.api.qobuz.create_qobuz_client", lambda _db: BrokenClient())
     response = api_client.get("/api/qobuz/search?q=x", headers=auth_headers)
 
     assert response.status_code == 502
@@ -873,10 +875,10 @@ def test_mark_downloads_stored_preserves_per_track_outcomes(tmp_path):
 # --- isolated sidecar boundary -------------------------------------------------
 
 
-def test_create_client_requires_configuration(monkeypatch):
+def test_create_client_requires_configuration(db, monkeypatch):
     _configure_qobuz(monkeypatch, enabled=False)
     with pytest.raises(QobuzConfigurationError):
-        qobuz_service.create_qobuz_client()
+        qobuz_service.create_qobuz_client(db)
 
 
 def test_is_qobuz_configured_requires_only_internal_control_settings(monkeypatch):
@@ -889,8 +891,10 @@ def test_is_qobuz_configured_requires_only_internal_control_settings(monkeypatch
     assert qobuz_service.is_qobuz_configured() is False
 
 
-def test_create_client_connects_to_sidecar_without_provider_secrets(monkeypatch):
+def test_create_client_connects_to_sidecar_without_provider_secrets(db, monkeypatch):
     _configure_qobuz(monkeypatch)
+    save_credential(db, "qobuz", {"token": "q" * 32, "user_id": "42"})
+    db.commit()
     calls: list[str] = []
 
     def connect(self):
@@ -899,7 +903,7 @@ def test_create_client_connects_to_sidecar_without_provider_secrets(monkeypatch)
         return {"connected": True, "label": "Studio"}
 
     monkeypatch.setattr(qobuz_service.QobuzSidecarClient, "connect", connect)
-    client = qobuz_service.create_qobuz_client()
+    client = qobuz_service.create_qobuz_client(db)
 
     assert client.label == "Studio"
     assert calls == ["test-sidecar-token" * 2]
@@ -918,7 +922,9 @@ def test_sidecar_http_error_does_not_include_response_body(monkeypatch):
 
     monkeypatch.setattr(qobuz_service.httpx, "request", lambda *args, **kwargs: Response())
     client = qobuz_service.QobuzSidecarClient(
-        "http://qobuz-sidecar.invalid", "test-sidecar-token"
+        "http://qobuz-sidecar.invalid",
+        "test-sidecar-token",
+        credential={"provider": "qobuz"},
     )
 
     with pytest.raises(QobuzProviderError) as captured:
@@ -955,7 +961,7 @@ def test_qobuz_task_fails_without_retry_on_configuration_error(
     job_id, _ = _create_qobuz_job(session_factory, mode="url")
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
 
-    def raise_config():
+    def raise_config(_db):
         raise QobuzConfigurationError("not configured")
 
     monkeypatch.setattr("app.workers.tasks.create_qobuz_client", raise_config)
@@ -1044,7 +1050,7 @@ def test_qobuz_fetch_missing_end_to_end(
         ]
     )
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
-    monkeypatch.setattr("app.workers.tasks.create_qobuz_client", lambda: fake_client)
+    monkeypatch.setattr("app.workers.tasks.create_qobuz_client", lambda _db: fake_client)
 
     def fake_download(client, track_id, staging_dir, quality, embed_art):
         titles = {"101": "First Track", "102": "Second Track", "103": "Third Track"}
@@ -1127,7 +1133,7 @@ def test_qobuz_url_task_downloads_imports_and_scans(
     job_id, _ = _create_qobuz_job(session_factory, mode="url")
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
     monkeypatch.setattr(
-        "app.workers.tasks.create_qobuz_client", lambda: FakeQobuzClient()
+        "app.workers.tasks.create_qobuz_client", lambda _db: FakeQobuzClient()
     )
 
     def fake_url_download(client, url, staging_dir, quality, embed_art):

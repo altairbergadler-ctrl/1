@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from app.api import auth as auth_api
 from app.api import (
@@ -7,6 +7,7 @@ from app.api import (
     library,
     matching,
     playlists,
+    providers,
     qobuz,
     sources,
     yandex_download,
@@ -14,6 +15,15 @@ from app.api import (
 from app.schemas import HealthOut
 
 app = FastAPI(title="Music Service MVP", version="0.4.0")
+
+
+@app.middleware("http")
+async def provider_api_no_store(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/providers"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/api/health", response_model=HealthOut)
@@ -28,6 +38,7 @@ app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(matching.router, prefix="/api/matching", tags=["matching"])
 app.include_router(download.router, prefix="/api/download", tags=["download"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 # Интеграция Qobuz (RESTRICT, docs/qobuz-dl-assessment.md): докачка
 # MISSING-треков и скачивание по ссылкам. Роутер подключается последним —
 # опциональная надстройка над базовым контуром сервиса.

@@ -18,6 +18,7 @@ from app.schemas import (
     QobuzSearchOut,
     QobuzStatusOut,
 )
+from app.services.credentials import has_credential
 from app.services.qobuz import (
     QobuzAuthError,
     QobuzConfigurationError,
@@ -39,7 +40,7 @@ from app.workers.tasks import qobuz_download_task
 # Общие правила маппинга ошибок (ограничения RESTRICT, assessment sections 3/7:
 # API никогда не возвращает секреты/токены — в detail только нейтральные
 # формулировки без email, токена и параметров запроса):
-#   503 — интеграция выключена или креденшелы не заданы в .env;
+#   503 — интеграция выключена или encrypted credential не настроен;
 #   400 — Qobuz отклонил креденшелы/токен (QobuzAuthError);
 #   502 — Qobuz недоступен или ответил ошибкой (QobuzProviderError).
 #
@@ -75,8 +76,8 @@ def _sidecar_status() -> dict:
 
 # 503, если интеграция выключена или креденшелы не заданы: дальше идти
 # бессмысленно, а создание обречённого задания только засорит очередь.
-def _require_configured() -> None:
-    if not is_qobuz_configured(settings):
+def _require_configured(db: Session) -> None:
+    if not is_qobuz_configured(settings) or not has_credential(db, "qobuz"):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Qobuz is not configured",
@@ -86,9 +87,9 @@ def _require_configured() -> None:
 # Создание клиента = одновременно проверка логина (connect/search). Ошибки
 # маппятся в HTTP без утечки секретов: 503 не настроен, 400 креденшелы
 # отклонены, 502 провайдер недоступен.
-def _make_client():
+def _make_client(db: Session):
     try:
-        return create_qobuz_client()
+        return create_qobuz_client(db)
     except QobuzConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -107,14 +108,16 @@ def _make_client():
 
 
 @router.get("/status", response_model=QobuzStatusOut)
-def qobuz_status():
+def qobuz_status(db: Session = Depends(get_db)):
     # Только нечувствительные флаги и лимиты: enabled (выключатель),
     # configured (креденшелы заданы?), качество и лимит треков за запуск.
     # Секреты/токены/API-ответы Qobuz здесь не возвращаются никогда.
     sidecar = _sidecar_status()
     return {
         "enabled": settings.qobuz_enabled,
-        "configured": bool(sidecar.get("configured")),
+        "configured": bool(
+            sidecar.get("configured") and has_credential(db, "qobuz")
+        ),
         "quality": settings.qobuz_quality,
         "max_tracks_per_run": settings.qobuz_max_tracks_per_run,
         "batch_delay_seconds": settings.qobuz_batch_delay_seconds,
@@ -166,15 +169,15 @@ def qobuz_eligibility(playlist_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/connect", response_model=QobuzConnectOut)
-def qobuz_connect():
+def qobuz_connect(db: Session = Depends(get_db)):
     # «Подключить» = попытка создать клиента: это и есть проверка логина.
     # При успехе отдаём только label тарифа (например Studio) — он не секрет
     # и нужен фронтенду как подтверждение активной платной подписки
     # (бесплатные аккаунты qobuz-dl отклоняет сам через IneligibleError,
     # assessment section 3). Коды: 503 не настроен, 400 креденшелы отклонены
-    # (в т.ч. протухший QOBUZ_AUTH_TOKEN), 502 Qobuz недоступен.
-    _require_configured()
-    client = _make_client()
+    # (в т.ч. протухший активный credential), 502 Qobuz недоступен.
+    _require_configured(db)
+    client = _make_client(db)
     return {"connected": True, "label": getattr(client, "label", None)}
 
 
@@ -183,12 +186,13 @@ def qobuz_search(
     q: str = Query(min_length=1, max_length=256),
     kind: str = Query(default="track", alias="type", pattern="^(track|album)$"),
     limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
 ):
     # Живой поиск по каталогу Qobuz (track|album). Параметр называется kind,
     # потому что имя type занято builtin; наружу — alias "type".
     # Ошибки маппятся так же, как в connect: 503/400/502.
-    _require_configured()
-    client = _make_client()
+    _require_configured(db)
+    client = _make_client(db)
     try:
         candidates = (
             search_tracks(client, q, limit)
@@ -334,7 +338,7 @@ def qobuz_download_url(payload: QobuzDownloadUrlIn, db: Session = Depends(get_db
     # (202). Поддерживаемые типы URL проверяет сервис внутри задания:
     # в MVP только album и track; playlist/artist/label завершат задание
     # ошибкой QobuzProviderError с понятным сообщением (ограничение MVP).
-    _require_configured()
+    _require_configured(db)
     return _queue_qobuz_job(db, mode="url", url=payload.url.strip())
 
 
@@ -347,7 +351,7 @@ def qobuz_fetch_missing(payload: QobuzFetchMissingIn, db: Session = Depends(get_
     # Докачка MISSING-треков плейлиста из каталога Qobuz. 404, если плейлиста
     # нет (проверяем до создания задания, чтобы не ставить обречённый job);
     # 503 — интеграция не настроена. Иначе 202 + активное задание.
-    _require_configured()
+    _require_configured(db)
     if db.get(Playlist, payload.playlist_id) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     return _queue_qobuz_job(db, mode="fetch_missing", playlist_id=payload.playlist_id)

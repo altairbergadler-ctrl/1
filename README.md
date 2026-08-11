@@ -52,7 +52,10 @@ Yandex fallback-контейнеры `.m4a`, `.aac`, `.mp3`; читает тег
 
 - `GET /api/sources/spotify/connect` — начало Spotify Authorization Code OAuth;
 - `GET /api/sources/spotify/callback` — callback с одноразовым Redis state;
-- `POST /api/sources/yandex/connect` — проверка и сохранение `YANDEX_TOKEN`;
+- `PUT /api/providers/yandex/credentials` — проверка и атомарная ротация токена;
+- `PUT /api/providers/qobuz/credentials` — проверка и атомарная ротация token/user_id;
+- `GET /api/providers/health` — отдельное здоровье account/API/sidecar/worker;
+- `POST /api/providers/{provider}/health-check` — ручная фоновая проверка;
 - `GET /api/sources` — подключённые источники без выдачи токенов;
 - `POST /api/playlists/import` — фоновый импорт по `source_id`;
 - `GET /api/playlists` — список и сводка READY/MISSING/REVIEW/UNMATCHED;
@@ -66,8 +69,9 @@ Spotify требует `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и точн�
 `localhost` как OAuth redirect URI. В текущем Development Mode содержимое
 плейлиста доступно только владельцу и соавторам; подписанные чужие плейлисты
 могут быть перечислены, но будут пропущены провайдером с `403`.
-Для Яндекс.Музыки используется `YANDEX_TOKEN` из `.env`. Токены провайдеров
-никогда не возвращаются API.
+Yandex/Qobuz credentials вводятся на странице PWA «Провайдеры», проверяются
+до активации и хранятся в AES-256-GCM vault. Старое значение остаётся активным,
+если проверка нового завершилась ошибкой. Токены никогда не возвращаются API.
 
 Spotify пропускает неизменившиеся плейлисты по `snapshot_id`. Для
 Яндекс.Музыки вычисляется детерминированный SHA-256 по версии и упорядоченному
@@ -126,18 +130,15 @@ Worker кэширует только оболочку приложения; API 
 
 Переменные окружения (`.env`):
 
-Qobuz подключается на уровне серверной конфигурации и остаётся активным всё
-время работы стека. PWA не требует ручного подключения: при заполненной
-конфигурации карточка источника показывает `включён постоянно`. Endpoint
-`POST /api/qobuz/connect` сохранён только как диагностическая проверка токена.
+Qobuz включается серверным флагом, а account credential добавляется и
+ротируется на странице PWA «Провайдеры» без перезапуска Docker. Endpoint
+`POST /api/qobuz/connect` сохранён как диагностическая проверка активной версии.
 
 - `QOBUZ_ENABLED=true` — включает интеграцию (по умолчанию выключена);
-- `QOBUZ_AUTH_TOKEN`, `QOBUZ_USER_ID` — единственный способ авторизации. Как
-  получить:
-  войти на `play.qobuz.com` → DevTools → Application → Local Storage → ключ
-  `localuser` → поля `token` и `id`. Токен живёт только в `.env`: в БД не
-  сохраняется, API его не возвращает. Если connect/search начнут отвечать
-  400/401 — токен протух, повторите извлечение;
+- `QOBUZ_CREDENTIAL_KEY_HOST_FILE` — ignored файл с отдельным 32-byte ключом
+  шифрования Qobuz vault; sidecar получает этот файл через Docker Secret;
+- `PROVIDER_CREDENTIAL_KEY_HOST_FILE` — отдельный ключ vault для
+  Yandex/Spotify, недоступный Qobuz sidecar;
 - `QOBUZ_INTERNAL_TOKEN` — отдельный случайный длинный токен приватного API
   sidecar; он не должен совпадать с `APP_AUTH_TOKEN`;
 - `QOBUZ_QUALITY` — `6` (16/44.1), `7` (24/<96 kHz),
@@ -160,6 +161,8 @@ Endpoints (все требуют авторизации):
 - `POST /api/qobuz/connect` — проверка токена; при успехе возвращает `label`
   тарифа (`400` — токен отклонён, `502` — Qobuz недоступен, `503` — не
   настроен);
+- `PUT /api/providers/qobuz/credentials` — проверяет новый token/user_id в
+  sidecar и только после успеха атомарно активирует новую encrypted-версию;
 - `GET /api/qobuz/search?q=&type=track|album&limit=` — поиск по каталогу Qobuz;
 - `GET /api/qobuz/download-status/{playlist_id}` — последний сохранённый
   прогресс Qobuz-загрузки плейлиста, включая этап job и статусы отдельных

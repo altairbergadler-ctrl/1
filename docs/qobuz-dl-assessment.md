@@ -44,8 +44,9 @@ worker <-- verified relative paths ------+
 local music library RW
 ```
 
-- `qobuz-sidecar` получает только `QOBUZ_AUTH_TOKEN`, необязательный
-  `QOBUZ_USER_ID`, внутренний control-токен и staging mount.
+- `qobuz-sidecar` получает отдельный Qobuz encryption key через Docker Secret,
+  внутренний control-токен и staging mount. Зашифрованный credential envelope
+  передаётся только в теле приватного запроса на время операции.
 - У sidecar нет `APP_AUTH_TOKEN`, Spotify/Yandex-секретов, URL базы/Redis,
   Docker socket и mount локальной библиотеки.
 - `backend` не видит staging и монтирует библиотеку read-only.
@@ -56,14 +57,15 @@ local music library RW
 
 ## 3. Авторизация и секреты
 
-Разрешён только токен браузерной сессии (`QOBUZ_AUTH_TOKEN`). Основной пароль
-Qobuz стороннему пакету не передаётся; email/password fallback удалён. Токен:
+Разрешён только token/user_id браузерной сессии. Основной пароль Qobuz
+стороннему пакету не передаётся; email/password fallback удалён. Credential:
 
-- хранится только в ignored `.env` и передаётся только sidecar;
-- не записывается в БД, ответы API или логи;
+- шифруется AES-256-GCM; PostgreSQL хранит только nonce/ciphertext/key_id/version;
+- ключ хранится отдельным ignored-файлом и монтируется как Docker Secret;
+- не попадает в container environment, ответы API, URL или логи;
 - не возвращается `/status` и `/connect`;
-- при ротации/истечении заменяется владельцем в `.env` с последующим restart
-  sidecar.
+- при ротации сначала проверяется sidecar/Qobuz, затем активируется одной
+  транзакцией; ошибка сохраняет старую версию, restart Docker не требуется.
 
 Внутренний `QOBUZ_INTERNAL_TOKEN` — отдельный случайный секрет для приватного
 HTTP API sidecar. Он не является credential аккаунта Qobuz.

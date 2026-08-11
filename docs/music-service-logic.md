@@ -130,7 +130,11 @@ tracks(id, album_id, title, title_normalized, track_no, disc_no,
 files(id, track_id, path_on_nas, format, bit_depth, sample_rate,
       bitrate, size_bytes, sha1, spectrum_verified bool)
 releases(id, tracker, topic_url, magnet, status, quality_score)
-playlist_sources(id, service[spotify|yandex], user_id, tokens)
+playlist_sources(id, service[spotify|yandex])
+provider_credentials(id, provider, ciphertext, nonce, key_id, version,
+                     validated_at, updated_at)
+provider_health(id, provider, component[account|provider_api|sidecar|worker],
+                state, checked_at, retry_at)
 playlists(id, source_id, external_id, name, snapshot_hash, updated_at)
 playlist_items(id, playlist_id, position, artist_raw, title_raw,
                album_raw, isrc, external_track_id)

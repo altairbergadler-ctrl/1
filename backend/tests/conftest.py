@@ -10,6 +10,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+TEST_FIXTURES = Path(__file__).parent / "fixtures"
+
 os.environ["DATABASE_URL"] = "sqlite+pysqlite://"
 os.environ["REDIS_URL"] = "redis://localhost:6379/15"
 os.environ["MUSIC_LIBRARY_PATH"] = "./test-music"
@@ -24,6 +26,12 @@ os.environ["QOBUZ_INTERNAL_TOKEN"] = "test-qobuz-internal-token"
 os.environ["YANDEX_DOWNLOAD_ENABLED"] = "false"
 os.environ["YANDEX_SIGNER_URL"] = "http://yandex-signer:8091"
 os.environ["YANDEX_INTERNAL_TOKEN"] = "test-yandex-internal-token"
+os.environ["PROVIDER_CREDENTIAL_KEY_FILE"] = str(
+    TEST_FIXTURES / "provider-credentials.test.key"
+)
+os.environ["QOBUZ_CREDENTIAL_KEY_FILE"] = str(
+    TEST_FIXTURES / "qobuz-credentials.test.key"
+)
 
 from app.db import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402

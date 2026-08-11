@@ -19,7 +19,7 @@
 ## 2. Что реализовано
 
 - Docker Compose: PostgreSQL, Redis, FastAPI, Celery, Nginx/PWA.
-- Alembic: `0004_provider_attempts (head)`.
+- Alembic: `0005_provider_health_credentials (head)`.
 - Read-only монтирование реальной библиотеки через
   `MUSIC_LIBRARY_HOST_PATH`; локально используется `X:/Music`.
 - Сканер lossless-файлов с тегами, SHA-1, идемпотентностью,
@@ -32,6 +32,8 @@
 - PWA с HttpOnly-cookie; для Tailscale HTTPS локально включен
   `AUTH_COOKIE_SECURE=true`.
 - Приватный внешний доступ через Tailscale Serve HTTPS. Funnel не включён.
+- Provider Health & Credential Rotation: раздельные account/API/sidecar/worker
+  states, encrypted vault, проверка до активации, hot rotation и Celery beat.
 
 ## 3. Итоговая приёмка MVP
 
@@ -42,7 +44,7 @@
 | `docker compose build` | Успешно для backend/worker/migrate/frontend |
 | Docker services | backend/frontend/worker running; PostgreSQL/Redis healthy |
 | Celery | worker ping: `pong` |
-| Alembic | current = heads = `0004_provider_attempts` |
+| Alembic | current = heads = `0005_provider_health_credentials` |
 | Music mount | backend и worker: `X:/Music` → `/music/library`, `RW=false` |
 | Pytest | `138 passed` с live-PWA, без skip |
 | HTTPS/auth | health/login `200`, cookie `Secure; HttpOnly` |
@@ -53,6 +55,11 @@
 | Yandex liked playlist | 72 tracks |
 | Matching | 1 READY, 71 MISSING, 0 NEEDS_REVIEW |
 | Acceptance track | `Slayyyter — DANCE...`: exact, confidence `0.9799`, READY |
+
+Отдельная приёмка Provider Health 2026-08-10 описана в
+`docs/provider-health-credential-rotation.md`: backend `212 passed, 5 skipped`,
+Qobuz sidecar `9 tests`, Alembic `0005`, Celery `pong`, live Yandex health и
+hot rotation без restart.
 | Range | `206`, bytes `0-1023/36684928` |
 | M3U8 | `200`, acceptance track present |
 | Playlist ZIP | `200`, 2 entries, all ZIP_STORED, FLAC SHA-1 equals source |
@@ -122,14 +129,13 @@ docker compose exec -T worker celery -A app.workers.celery_app.celery inspect pi
 
 - `APP_AUTH_TOKEN`;
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`;
-- `YANDEX_TOKEN`;
+- `PROVIDER_CREDENTIAL_KEY_HOST_FILE`, `QOBUZ_CREDENTIAL_KEY_HOST_FILE`;
 - `YANDEX_DOWNLOAD_ENABLED`, `YANDEX_SIGNER_URL`, `YANDEX_INTERNAL_TOKEN`,
   `YANDEX_STAGING_PATH`,
   `YANDEX_MAX_TRACKS_PER_RUN`, `YANDEX_REQUEST_DELAY_SECONDS`,
   `YANDEX_BATCH_DELAY_SECONDS` (опционально, см. раздел
   «Яндекс.Музыка: докачка» в README);
-- `QOBUZ_ENABLED`, `QOBUZ_AUTH_TOKEN`, `QOBUZ_USER_ID`,
-  `QOBUZ_INTERNAL_TOKEN` (опционально, см. раздел «Qobuz» в README и
+- `QOBUZ_ENABLED`, `QOBUZ_INTERNAL_TOKEN` (опционально, см. раздел «Qobuz» в README и
   `docs/qobuz-dl-assessment.md`);
 - `MUSIC_LIBRARY_HOST_PATH`, `QOBUZ_STAGING_HOST_PATH`;
 - `AUTH_COOKIE_SECURE`;

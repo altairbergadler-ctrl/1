@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Playlist, PlaylistItem, PlaylistSource, ServiceEnum
+from app.services.credentials import CredentialError, get_credential_payload
 from app.services.normalize import normalize_playlist_item
 
 YANDEX_TRACK_BATCH_SIZE = 50
@@ -125,7 +126,7 @@ def import_yandex_playlists(
     """
 
     _validate_source(source)
-    yandex = client or create_yandex_client(_source_token(source))
+    yandex = client or create_yandex_client(_source_token(db, source))
 
     try:
         remote_playlists = list(yandex.users_playlists_list() or [])
@@ -176,7 +177,7 @@ def refresh_yandex_playlist(
         raise YandexConfigurationError("Playlist source does not exist")
     _validate_source(source)
 
-    yandex = client or create_yandex_client(_source_token(source))
+    yandex = client or create_yandex_client(_source_token(db, source))
     owner_id, kind = _split_playlist_id(playlist.external_id)
     try:
         if kind == "liked":
@@ -518,8 +519,13 @@ def _validate_source(source: PlaylistSource) -> None:
         raise YandexConfigurationError("Playlist source is not Yandex Music")
 
 
-def _source_token(source: PlaylistSource) -> str:
-    token = source.access_token or settings.yandex_token
+def _source_token(db: Session, source: PlaylistSource) -> str:
+    try:
+        token = get_credential_payload(db, "yandex").get("token")
+    except CredentialError:
+        # Transitional only: the migration command clears these fields before
+        # the updated worker starts.
+        token = source.access_token or settings.yandex_token
     if not token or not token.strip():
         raise YandexConfigurationError("YANDEX_TOKEN is not configured")
-    return token
+    return str(token)

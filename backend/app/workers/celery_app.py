@@ -23,4 +23,16 @@ celery.conf.update(
         "visibility_timeout": settings.celery_visibility_timeout_seconds,
     },
     visibility_timeout=settings.celery_visibility_timeout_seconds,
+    beat_schedule={
+        "qobuz-provider-health": {
+            "task": "provider_health_check",
+            "schedule": settings.provider_health_interval_seconds,
+            "args": ("qobuz",),
+        },
+        "yandex-provider-health": {
+            "task": "provider_health_check",
+            "schedule": settings.provider_health_interval_seconds,
+            "args": ("yandex",),
+        },
+    },
 )

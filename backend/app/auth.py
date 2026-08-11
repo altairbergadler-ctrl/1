@@ -1,6 +1,8 @@
 import hashlib
 import hmac
-from fastapi import Cookie, Depends, HTTPException, status
+from urllib.parse import urlparse
+
+from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import settings
@@ -49,3 +51,19 @@ def require_auth(
             detail="Invalid token",
         )
     return True
+
+
+def require_same_origin(request: Request) -> None:
+    """Reject cross-origin state changes while keeping bearer/CLI calls usable."""
+
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    parsed = urlparse(origin)
+    forwarded_host = request.headers.get("x-forwarded-host")
+    expected_host = forwarded_host or request.headers.get("host") or ""
+    if not parsed.scheme or parsed.netloc.casefold() != expected_host.casefold():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-origin provider update is not allowed",
+        )

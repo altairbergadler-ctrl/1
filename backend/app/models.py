@@ -46,6 +46,21 @@ class JobStatus(str, enum.Enum):
     failed = "failed"
 
 
+class ProviderHealthState(str, enum.Enum):
+    healthy = "healthy"
+    expired = "expired"
+    rate_limited = "rate_limited"
+    provider_down = "provider_down"
+    not_configured = "not_configured"
+
+
+class ProviderHealthComponent(str, enum.Enum):
+    account = "account"
+    provider_api = "provider_api"
+    sidecar = "sidecar"
+    worker = "worker"
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
@@ -258,4 +273,54 @@ class ProviderAttempt(Base):
             "provider", "lookup_key", name="uq_provider_attempts_provider_lookup"
         ),
         Index("ix_provider_attempts_playlist_item", "playlist_item_id"),
+    )
+
+
+class ProviderCredential(Base):
+    """Authenticated provider material encrypted with an external AEAD key."""
+
+    __tablename__ = "provider_credentials"
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(32), nullable=False, unique=True)
+    ciphertext = Column(Text, nullable=False)
+    nonce = Column(String(64), nullable=False)
+    key_id = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    validated_at = Column(DateTime, nullable=False)
+
+
+class ProviderHealth(Base):
+    """Latest non-sensitive health result for one provider component."""
+
+    __tablename__ = "provider_health"
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(32), nullable=False)
+    component = Column(
+        Enum(
+            ProviderHealthComponent,
+            values_callable=enum_values,
+            name="provider_health_component",
+        ),
+        nullable=False,
+    )
+    state = Column(
+        Enum(
+            ProviderHealthState,
+            values_callable=enum_values,
+            name="provider_health_state",
+        ),
+        nullable=False,
+    )
+    detail_code = Column(String(64))
+    latency_ms = Column(Integer)
+    credential_version = Column(Integer)
+    checked_at = Column(DateTime, default=utcnow, nullable=False)
+    retry_at = Column(DateTime)
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "component", name="uq_provider_health_provider_component"
+        ),
+        Index("ix_provider_health_provider", "provider"),
     )

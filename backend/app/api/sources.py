@@ -8,6 +8,7 @@ from app.config import settings
 from app.db import get_db
 from app.models import PlaylistSource, ServiceEnum
 from app.schemas import SourceListOut, SourceOut
+from app.services.credentials import has_credential, save_credential
 from app.services.spotify import (
     SpotifyConfigurationError,
     SpotifyOAuthStateError,
@@ -25,11 +26,11 @@ from app.services.yandex import YandexConfigurationError, create_yandex_client
 router = APIRouter()
 
 
-def _source_out(source: PlaylistSource) -> dict:
+def _source_out(db: Session, source: PlaylistSource) -> dict:
     return {
         "id": source.id,
         "service": source.service.value,
-        "connected": bool(source.access_token),
+        "connected": has_credential(db, source.service.value),
         "expires_at": source.expires_at,
     }
 
@@ -41,7 +42,7 @@ def _source_out(source: PlaylistSource) -> dict:
 )
 def list_sources(db: Session = Depends(get_db)):
     sources = db.scalars(select(PlaylistSource).order_by(PlaylistSource.id)).all()
-    return {"items": [_source_out(source) for source in sources]}
+    return {"items": [_source_out(db, source) for source in sources]}
 
 
 @router.get(
@@ -116,7 +117,7 @@ def spotify_callback(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Spotify OAuth is not configured",
         ) from exc
-    return _source_out(source)
+    return _source_out(db, source)
 
 
 @router.post(
@@ -152,9 +153,10 @@ def connect_yandex(
     if source is None:
         source = PlaylistSource(service=ServiceEnum.yandex)
         db.add(source)
-    source.access_token = token
+    save_credential(db, "yandex", {"token": token})
+    source.access_token = None
     source.refresh_token = None
     source.expires_at = None
     db.commit()
     db.refresh(source)
-    return _source_out(source)
+    return _source_out(db, source)

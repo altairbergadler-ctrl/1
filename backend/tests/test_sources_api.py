@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import PlaylistSource, ServiceEnum, utcnow
+from app.services.credentials import get_credential_payload
 from app.services.spotify import (
     SpotifyAuthorizationRequest,
     SpotifyOAuthStateError,
@@ -92,8 +93,12 @@ def test_spotify_callback_upserts_one_source_without_exposing_tokens(
     source = db.scalar(
         select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
     )
-    assert source.access_token == "second-access"
-    assert source.refresh_token == "refresh-token"
+    assert source.access_token is None
+    assert source.refresh_token is None
+    assert get_credential_payload(db, "spotify") == {
+        "access_token": "second-access",
+        "refresh_token": "refresh-token",
+    }
 
 
 def test_spotify_callback_rejects_invalid_state(api_client, monkeypatch):
@@ -166,7 +171,8 @@ def test_yandex_connect_and_source_list_hide_token(
     source = db.scalar(
         select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
     )
-    assert source.access_token == "yandex-test-token"
+    assert source.access_token is None
+    assert get_credential_payload(db, "yandex") == {"token": "yandex-test-token"}
 
 
 def test_yandex_connect_reads_token_only_from_settings(

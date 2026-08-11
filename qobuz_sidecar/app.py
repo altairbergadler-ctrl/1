@@ -1,13 +1,17 @@
 """Isolated qobuz-dl adapter with a private JSON control API.
 
-This process receives only Qobuz credentials, an internal control token and a
-staging mount.  It has no database, Redis, Docker socket or library mount.
+This process receives only an encrypted Qobuz envelope, its dedicated key, an
+internal control token and a staging mount.  It has no database, Redis, Docker
+socket or library mount.
 Outbound HTTPS is forced through the allowlisting CONNECT proxy from Compose.
 """
 
 from __future__ import annotations
 
 import hmac
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -19,12 +23,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from mutagen import File as MutagenFile
 
 _STAGING = Path(os.environ.get("QOBUZ_STAGING_PATH", "/music/staging")).resolve()
 _INTERNAL_TOKEN = os.environ.get("QOBUZ_INTERNAL_TOKEN", "").strip()
-_AUTH_TOKEN = os.environ.get("QOBUZ_AUTH_TOKEN", "").strip()
-_USER_ID = os.environ.get("QOBUZ_USER_ID", "").strip()
+_CREDENTIAL_KEY_FILE = os.environ.get(
+    "QOBUZ_CREDENTIAL_KEY_FILE", "/run/secrets/qobuz_credential_key"
+).strip()
 _CONNECT_TIMEOUT = float(os.environ.get("QOBUZ_CONNECT_TIMEOUT_SECONDS", "10"))
 _READ_TIMEOUT = float(os.environ.get("QOBUZ_READ_TIMEOUT_SECONDS", "120"))
 _MAX_FILE_BYTES = int(os.environ.get("QOBUZ_MAX_FILE_BYTES", str(4 * 1024**3)))
@@ -64,6 +70,10 @@ class SidecarBusyError(SidecarError):
 
 class SidecarLimitError(SidecarError):
     status = 413
+
+
+class SidecarRateLimitedError(SidecarError):
+    status = 429
 
 
 def _validate_https_url(url: str) -> str:
@@ -138,7 +148,70 @@ def _modules():
 
 
 def _configured() -> bool:
-    return bool(len(_INTERNAL_TOKEN) >= 32 and _AUTH_TOKEN)
+    if len(_INTERNAL_TOKEN) < 32:
+        return False
+    try:
+        _load_credential_key()
+    except SidecarConfigurationError:
+        return False
+    return True
+
+
+def _load_credential_key() -> bytes:
+    try:
+        data = Path(_CREDENTIAL_KEY_FILE).read_bytes()
+    except OSError as exc:
+        raise SidecarConfigurationError("Qobuz credential key is unavailable") from exc
+    if len(data) == 32:
+        return data
+    raw = data.strip()
+    try:
+        decoded = base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
+    except (binascii.Error, TypeError, ValueError) as exc:
+        raise SidecarConfigurationError("Qobuz credential key is invalid") from exc
+    if len(decoded) != 32:
+        raise SidecarConfigurationError("Qobuz credential key must contain 32 bytes")
+    return decoded
+
+
+def _credential(envelope: Any) -> tuple[str, str, int]:
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("schema") != 1
+        or envelope.get("provider") != "qobuz"
+    ):
+        raise SidecarConfigurationError("Qobuz credential is not configured")
+    try:
+        version = int(envelope.get("version"))
+        nonce_text = str(envelope.get("nonce") or "")
+        ciphertext_text = str(envelope.get("ciphertext") or "")
+        nonce = base64.urlsafe_b64decode(
+            nonce_text.encode() + b"=" * (-len(nonce_text) % 4)
+        )
+        ciphertext = base64.urlsafe_b64decode(
+            ciphertext_text.encode() + b"=" * (-len(ciphertext_text) % 4)
+        )
+    except (binascii.Error, TypeError, ValueError) as exc:
+        raise SidecarAuthError("Qobuz credential envelope is invalid") from exc
+    if version < 1:
+        raise SidecarAuthError("Qobuz credential envelope is invalid")
+    key = _load_credential_key()
+    expected_key_id = hashlib.sha256(key).hexdigest()[:16]
+    if str(envelope.get("key_id") or "") != expected_key_id:
+        raise SidecarAuthError("Qobuz credential key does not match")
+    aad = f"music-service:provider-credential:v1:qobuz:{version}".encode()
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, aad)
+        payload = json.loads(plaintext)
+    except Exception as exc:
+        raise SidecarAuthError("Qobuz credential integrity validation failed") from exc
+    if not isinstance(payload, dict):
+        raise SidecarAuthError("Qobuz credential payload is invalid")
+    token = str(payload.get("token") or "").strip()
+    user_id = str(payload.get("user_id") or "").strip()
+    if not token or not user_id:
+        raise SidecarConfigurationError("Qobuz credential is not configured")
+    return token, user_id, version
 
 
 def _bundle(force: bool = False) -> tuple[str, list[str]]:
@@ -160,7 +233,13 @@ def _bundle(force: bool = False) -> tuple[str, list[str]]:
         return app_id, list(secrets)
 
 
-def _token_client(modules: dict[str, Any], app_id: str, secrets: list[str]):
+def _token_client(
+    modules: dict[str, Any],
+    app_id: str,
+    secrets: list[str],
+    auth_token: str,
+    user_id: str,
+):
     client = modules["qopy"].Client.__new__(modules["qopy"].Client)
     client.secrets = secrets
     client.id = str(app_id)
@@ -170,34 +249,33 @@ def _token_client(modules: dict[str, Any], app_id: str, secrets: list[str]):
             "User-Agent": "Mozilla/5.0",
             "X-App-Id": str(app_id),
             "Content-Type": "application/json;charset=UTF-8",
-            "X-User-Auth-Token": _AUTH_TOKEN,
+            "X-User-Auth-Token": auth_token,
         }
     )
     client.base = "https://www.qobuz.com/api.json/0.2/"
     client.sec = None
-    client.uat = _AUTH_TOKEN
+    client.uat = auth_token
     client.label = "token"
     client.cfg_setup()
-    if _USER_ID:
-        try:
-            data = client.api_call("user/get", user_id=_USER_ID)
-            client.label = (
-                data.get("credential", {}).get("parameters", {}).get("short_label")
-                or "token"
-            )
-        except Exception:
-            pass
+    data = client.api_call("user/get", user_id=user_id)
+    if not isinstance(data, dict):
+        raise SidecarAuthError("Qobuz returned an invalid account response")
+    client.label = (
+        data.get("credential", {}).get("parameters", {}).get("short_label")
+        or "token"
+    )
     return client
 
 
-def _client():
+def _client(envelope: Any):
     if not _configured():
-        raise SidecarConfigurationError("Qobuz credentials are not configured")
+        raise SidecarConfigurationError("Qobuz sidecar credential key is not configured")
+    auth_token, user_id, _version = _credential(envelope)
     modules = _modules()
     for attempt in range(2):
         app_id, secrets = _bundle(force=attempt == 1)
         try:
-            return _token_client(modules, app_id, secrets)
+            return _token_client(modules, app_id, secrets, auth_token, user_id)
         except modules["InvalidAppSecretError"] as exc:
             if attempt == 0:
                 continue
@@ -209,6 +287,8 @@ def _client():
         ) as exc:
             raise SidecarAuthError("Qobuz rejected the configured credential") from exc
         except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise SidecarRateLimitedError("Qobuz rate limit is active") from exc
             if exc.response is not None and exc.response.status_code in (400, 401, 403):
                 raise SidecarAuthError("Qobuz rejected the configured credential") from exc
             raise SidecarError("Qobuz API request failed") from exc
@@ -264,7 +344,7 @@ def _download_track(payload: dict[str, Any]) -> dict[str, Any]:
     before = _snapshot()
     modules = _modules()
     modules["downloader"].Download(
-        _client(),
+        _client(payload.get("credential")),
         track_id,
         str(_STAGING),
         quality,
@@ -294,7 +374,7 @@ def _download_url(payload: dict[str, Any]) -> dict[str, Any]:
     before = _snapshot()
     modules = _modules()
     modules["downloader"].Download(
-        _client(),
+        _client(payload.get("credential")),
         item_id,
         str(_STAGING),
         quality,
@@ -307,8 +387,8 @@ def _download_url(payload: dict[str, Any]) -> dict[str, Any]:
 def _dispatch(method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
     if method == "GET" and path == "/status":
         return {"configured": _configured()}
-    if method == "POST" and path == "/connect":
-        client = _client()
+    if method == "POST" and path in {"/connect", "/credentials/validate"}:
+        client = _client(payload.get("credential"))
         return {"connected": True, "label": getattr(client, "label", None)}
     if method == "POST" and path == "/search":
         query = str(payload.get("query") or "").strip()
@@ -316,7 +396,7 @@ def _dispatch(method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]
         limit = max(1, min(50, int(payload.get("limit", 10))))
         if not query or len(query) > 256 or kind not in {"track", "album"}:
             raise SidecarError("Invalid Qobuz search request")
-        client = _client()
+        client = _client(payload.get("credential"))
         result = (
             client.search_tracks(query, limit)
             if kind == "track"

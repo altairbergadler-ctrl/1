@@ -16,6 +16,7 @@ from app.models import (
 )
 from app.services.musicbrainz import MusicBrainzClient, enrich_albums
 from app.services.matcher import run_matching
+from app.services.provider_health import run_provider_health_check
 from app.services.qobuz import (
     QobuzAuthError,
     QobuzConfigurationError,
@@ -796,7 +797,7 @@ def qobuz_download_task(
         db.commit()
         db.expire_all()
 
-        client = create_qobuz_client()
+        client = create_qobuz_client(db)
         downloads: dict = {}
         collected_files: list = []
         if mode == "url":
@@ -1093,6 +1094,53 @@ def qobuz_download_task(
                 countdown=min(120, 2**self.request.retries),
             )
         raise
+    finally:
+        db.close()
+
+
+@celery.task(name="provider_health_check")
+def provider_health_check_task(provider: str, job_id: int | None = None):
+    """Run a provider check in a worker and persist only non-sensitive results."""
+
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id) if job_id is not None else None
+        if job_id is not None and job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job is not None:
+            if job.status in (JobStatus.done, JobStatus.failed):
+                return {"status": job.status.value, "job_id": job.id}
+            job.status = JobStatus.running
+            job.heartbeat_at = utcnow()
+            db.commit()
+        snapshot = run_provider_health_check(db, provider, worker_healthy=True)
+        result = {
+            "provider": snapshot["provider"],
+            "configured": snapshot["configured"],
+            "states": {
+                component: snapshot[component]["state"]
+                for component in ("account", "provider_api", "sidecar", "worker")
+            },
+        }
+        if job is not None:
+            job.status = JobStatus.done
+            job.payload = json.dumps(result, separators=(",", ":"))
+            job.error = None
+            job.finished_at = utcnow()
+            job.heartbeat_at = utcnow()
+            db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(Job, job_id)
+            if job is not None and job.status not in (JobStatus.done, JobStatus.failed):
+                job.status = JobStatus.failed
+                job.error = f"Provider health check failed ({type(exc).__name__})"
+                job.finished_at = utcnow()
+                job.heartbeat_at = utcnow()
+                db.commit()
+        return {"status": "failed", "provider": str(provider), "error": type(exc).__name__}
     finally:
         db.close()
 

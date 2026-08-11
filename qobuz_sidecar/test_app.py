@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,21 +32,24 @@ class FakeResponse:
 
 class SidecarSecurityTests(unittest.TestCase):
     def test_configured_requires_internal_and_provider_tokens(self):
-        with (
-            patch.object(app, "_INTERNAL_TOKEN", "i" * 32),
-            patch.object(app, "_AUTH_TOKEN", "provider"),
-        ):
-            self.assertTrue(app._configured())
-        with (
-            patch.object(app, "_INTERNAL_TOKEN", "internal"),
-            patch.object(app, "_AUTH_TOKEN", ""),
-        ):
-            self.assertFalse(app._configured())
-        with (
-            patch.object(app, "_INTERNAL_TOKEN", "too-short"),
-            patch.object(app, "_AUTH_TOKEN", "provider"),
-        ):
-            self.assertFalse(app._configured())
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "credential.key"
+            key_file.write_bytes(b"k" * 32)
+            with (
+                patch.object(app, "_INTERNAL_TOKEN", "i" * 32),
+                patch.object(app, "_CREDENTIAL_KEY_FILE", str(key_file)),
+            ):
+                self.assertTrue(app._configured())
+            with (
+                patch.object(app, "_INTERNAL_TOKEN", "internal"),
+                patch.object(app, "_CREDENTIAL_KEY_FILE", str(key_file)),
+            ):
+                self.assertFalse(app._configured())
+            with (
+                patch.object(app, "_INTERNAL_TOKEN", "i" * 32),
+                patch.object(app, "_CREDENTIAL_KEY_FILE", str(key_file) + ".missing"),
+            ):
+                self.assertFalse(app._configured())
 
     def test_outbound_allowlist_accepts_only_https_qobuz_hosts(self):
         self.assertEqual(
@@ -65,6 +70,64 @@ class SidecarSecurityTests(unittest.TestCase):
         ):
             with self.subTest(blocked=blocked), self.assertRaises(app.SidecarError):
                 app._validate_https_url(blocked)
+
+    def test_encrypted_credential_round_trip_and_tamper_detection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "credential.key"
+            key = b"k" * 32
+            key_file.write_bytes(key)
+            nonce = b"n" * 12
+            aad = b"music-service:provider-credential:v1:qobuz:1"
+            ciphertext = app.AESGCM(key).encrypt(
+                nonce,
+                json.dumps(
+                    {"token": "synthetic-token", "user_id": "42"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode(),
+                aad,
+            )
+            envelope = {
+                "schema": 1,
+                "provider": "qobuz",
+                "version": 1,
+                "key_id": app.hashlib.sha256(key).hexdigest()[:16],
+                "nonce": base64.urlsafe_b64encode(nonce).decode().rstrip("="),
+                "ciphertext": base64.urlsafe_b64encode(ciphertext).decode().rstrip("="),
+            }
+            with patch.object(app, "_CREDENTIAL_KEY_FILE", str(key_file)):
+                self.assertEqual(
+                    app._credential(envelope),
+                    ("synthetic-token", "42", 1),
+                )
+                changed = dict(envelope)
+                raw = bytearray(ciphertext)
+                raw[-1] ^= 1
+                changed["ciphertext"] = (
+                    base64.urlsafe_b64encode(bytes(raw)).decode().rstrip("=")
+                )
+                with self.assertRaises(app.SidecarAuthError):
+                    app._credential(changed)
+
+    def test_account_validation_errors_are_not_ignored(self):
+        class FakeClient:
+            def cfg_setup(self):
+                return None
+
+            def api_call(self, _path, **_kwargs):
+                raise RuntimeError("synthetic rejection")
+
+        class FakeQopy:
+            Client = FakeClient
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic rejection"):
+            app._token_client(
+                {"qopy": FakeQopy},
+                "app-id",
+                ["app-secret"],
+                "synthetic-token",
+                "42",
+            )
 
     def test_safe_download_enforces_content_length_and_writes_exact_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -114,8 +177,14 @@ class SidecarSecurityTests(unittest.TestCase):
             self.assertFalse(lossy.exists())
 
     def test_status_contains_no_provider_credentials(self):
-        with patch.object(app, "_INTERNAL_TOKEN", "i" * 32):
-            result = app._dispatch("GET", "/status", {})
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "credential.key"
+            key_file.write_bytes(b"k" * 32)
+            with (
+                patch.object(app, "_INTERNAL_TOKEN", "i" * 32),
+                patch.object(app, "_CREDENTIAL_KEY_FILE", str(key_file)),
+            ):
+                result = app._dispatch("GET", "/status", {})
         self.assertEqual(set(result), {"configured"})
 
 

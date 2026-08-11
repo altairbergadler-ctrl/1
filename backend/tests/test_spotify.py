@@ -24,6 +24,7 @@ from app.services.spotify import (
     refresh_spotify_token,
     save_spotify_token,
 )
+from app.services.credentials import get_credential_payload
 
 
 class FakeRedis:
@@ -297,8 +298,12 @@ def test_save_token_creates_then_updates_the_single_spotify_source(db):
     updated = save_spotify_token(db, second, source=source)
 
     assert updated.id == source_id
-    assert updated.access_token == "second-access"
-    assert updated.refresh_token == "first-refresh"
+    assert updated.access_token is None
+    assert updated.refresh_token is None
+    assert get_credential_payload(db, "spotify") == {
+        "access_token": "second-access",
+        "refresh_token": "first-refresh",
+    }
     assert db.scalar(select(func.count()).select_from(PlaylistSource)) == 1
 
 

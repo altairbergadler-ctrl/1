@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class HealthOut(BaseModel):
@@ -275,3 +275,45 @@ class YandexDownloadEligibilityOut(BaseModel):
 
 class YandexFetchMissingIn(BaseModel):
     playlist_id: int = Field(gt=0)
+
+
+class ProviderHealthComponentOut(BaseModel):
+    state: str
+    detail_code: str | None = None
+    checked_at: datetime | None = None
+    latency_ms: int | None = None
+    credential_version: int | None = None
+    retry_at: datetime | None = None
+    stale: bool = False
+
+
+class ProviderHealthOut(BaseModel):
+    provider: str
+    configured: bool
+    credential_version: int | None = None
+    credential_updated_at: datetime | None = None
+    account: ProviderHealthComponentOut
+    provider_api: ProviderHealthComponentOut
+    sidecar: ProviderHealthComponentOut
+    worker: ProviderHealthComponentOut
+
+
+class ProviderHealthListOut(BaseModel):
+    items: list[ProviderHealthOut]
+
+
+class QobuzCredentialIn(BaseModel):
+    token: SecretStr = Field(min_length=8, max_length=4096)
+    user_id: SecretStr = Field(min_length=1, max_length=128)
+
+
+class YandexCredentialIn(BaseModel):
+    token: SecretStr = Field(min_length=8, max_length=4096)
+
+
+class ProviderCredentialOut(BaseModel):
+    provider: str
+    configured: bool = True
+    version: int
+    updated_at: datetime
+    label: str | None = None

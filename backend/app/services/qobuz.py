@@ -25,6 +25,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Match, MatchStatus, Playlist, PlaylistItem, ProviderAttempt
+from app.services.credentials import (
+    CredentialError,
+    credential_envelope,
+    get_credential_record,
+)
 from app.services.matcher import normalize_isrc
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
 
@@ -62,6 +67,10 @@ class QobuzProviderError(QobuzServiceError):
     """Qobuz or the isolated sidecar could not complete an operation."""
 
 
+class QobuzRateLimitedError(QobuzProviderError):
+    """Qobuz explicitly asked the account to slow down."""
+
+
 @dataclass(frozen=True, slots=True)
 class QobuzSearchCandidate:
     qobuz_id: str
@@ -88,9 +97,15 @@ class QobuzSearchCandidate:
 class QobuzSidecarClient:
     """Small authenticated client for the private sidecar control API."""
 
-    def __init__(self, base_url: str, internal_token: str):
+    def __init__(
+        self,
+        base_url: str,
+        internal_token: str,
+        credential: dict[str, Any] | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.internal_token = internal_token
+        self.credential = credential
         self.label: str | None = None
 
     def _request(
@@ -107,18 +122,25 @@ class QobuzSidecarClient:
             write=30.0,
             pool=5.0,
         )
+        request_payload = dict(payload or {})
+        if path != "/status" and "credential" not in request_payload:
+            if self.credential is None:
+                raise QobuzConfigurationError("Qobuz credential is not configured")
+            request_payload["credential"] = self.credential
         try:
             response = httpx.request(
                 method,
                 f"{self.base_url}{path}",
                 headers={"Authorization": f"Bearer {self.internal_token}"},
-                json=payload,
+                json=request_payload if method != "GET" else None,
                 timeout=timeout,
             )
         except httpx.TimeoutException as exc:
             raise QobuzProviderError("The isolated Qobuz sidecar timed out") from exc
         except httpx.HTTPError as exc:
             raise QobuzProviderError("The isolated Qobuz sidecar is unavailable") from exc
+        if response.status_code == 429:
+            raise QobuzRateLimitedError("Qobuz rate limit is active")
         if response.status_code in (400, 401):
             raise QobuzAuthError("Qobuz rejected the configured credential")
         if response.status_code == 503:
@@ -140,6 +162,13 @@ class QobuzSidecarClient:
 
     def connect(self) -> dict[str, Any]:
         result = self._request("POST", "/connect", payload={})
+        self.label = str(result.get("label") or "") or None
+        return result
+
+    def validate_credential(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        result = self._request(
+            "POST", "/credentials/validate", payload={"credential": envelope}
+        )
         self.label = str(result.get("label") or "") or None
         return result
 
@@ -180,14 +209,18 @@ def is_qobuz_configured(config: Any = settings) -> bool:
     )
 
 
-def create_qobuz_client() -> QobuzSidecarClient:
+def create_qobuz_client(db: Session) -> QobuzSidecarClient:
     if not is_qobuz_configured():
         raise QobuzConfigurationError(
             "QOBUZ_ENABLED, QOBUZ_SIDECAR_URL and QOBUZ_INTERNAL_TOKEN are required"
         )
+    record = get_credential_record(db, "qobuz")
+    if record is None:
+        raise QobuzConfigurationError("Qobuz credential is not configured")
     client = QobuzSidecarClient(
         settings.qobuz_sidecar_url,
         settings.qobuz_internal_token,
+        credential_envelope(record),
     )
     client.connect()
     return client

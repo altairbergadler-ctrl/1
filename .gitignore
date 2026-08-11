@@ -10,4 +10,5 @@ data/music/*
 !data/music/.gitkeep
 
 data/qobuz-staging/
+data/secrets/
 

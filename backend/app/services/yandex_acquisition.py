@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Playlist, PlaylistItem, PlaylistSource, ProviderAttempt, ServiceEnum
+from app.services.credentials import CredentialError, get_credential_payload
 from app.services.delivery import safe_filename
 from app.services.matcher import normalize_isrc
 from app.services.qobuz import (
@@ -209,11 +210,21 @@ def create_yandex_acquisition_client(db: Session):
     source = db.scalar(
         select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
     )
-    if source is None or not str(source.access_token or "").strip():
+    if source is None:
         raise YandexAcquisitionConfigurationError("Yandex source is not connected")
     try:
-        return create_yandex_client(source.access_token)
+        try:
+            token = get_credential_payload(db, "yandex").get("token")
+        except CredentialError:
+            token = source.access_token
+        if not str(token or "").strip():
+            raise YandexAcquisitionConfigurationError(
+                "Yandex source is not connected"
+            )
+        return create_yandex_client(str(token))
     except Exception as exc:
+        if isinstance(exc, YandexAcquisitionConfigurationError):
+            raise
         raise _provider_exception(exc) from exc
 
 

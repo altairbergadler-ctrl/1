@@ -103,6 +103,7 @@ function shell(content) {
           </span>
         </a>
         <nav class="nav-actions" aria-label="Основная навигация">
+          <a class="button ghost small" href="#/providers">Провайдеры</a>
           <a class="button ghost small" href="#/review">Review</a>
           <button class="ghost small" type="button" data-action="logout">Выйти</button>
         </nav>
@@ -222,6 +223,179 @@ function qobuzSourceCard(status) {
       </div>
     </section>
   `;
+}
+
+const providerStateLabels = {
+  healthy: "работает",
+  expired: "ключ истёк",
+  rate_limited: "лимит запросов",
+  provider_down: "недоступен",
+  not_configured: "не настроен",
+};
+
+const providerComponentLabels = {
+  account: "Аккаунт",
+  provider_api: "API провайдера",
+  sidecar: "Sidecar",
+  worker: "Worker",
+};
+
+function providerHealthCard(item) {
+  const components = Object.keys(providerComponentLabels).map((component) => {
+    const health = item[component];
+    const checked = health.checked_at
+      ? new Date(health.checked_at).toLocaleString("ru-RU")
+      : "ещё не проверялся";
+    return `
+      <div class="provider-component">
+        <span>${providerComponentLabels[component]}</span>
+        <span class="provider-state ${escapeHtml(health.state)}">${escapeHtml(providerStateLabels[health.state] || health.state)}</span>
+        <small>${escapeHtml(checked)}</small>
+      </div>
+    `;
+  }).join("");
+  return `
+    <article class="provider-card">
+      <div class="provider-heading">
+        <div>
+          <span class="source-badge">${escapeHtml(item.provider)}</span>
+          <h2>${item.provider === "qobuz" ? "Qobuz" : "Яндекс Музыка"}</h2>
+        </div>
+        <button class="ghost small" type="button" data-action="provider-health" data-provider="${escapeHtml(item.provider)}">Проверить сейчас</button>
+      </div>
+      <div class="provider-components">${components}</div>
+      <p class="muted provider-version">${item.configured ? `Активна версия ${item.credential_version}` : "Ключ ещё не добавлен"}</p>
+      ${providerCredentialGuide(item.provider)}
+      ${providerCredentialForm(item.provider)}
+    </article>
+  `;
+}
+
+function providerCredentialGuide(provider) {
+  if (provider === "qobuz") {
+    return `
+      <details class="credential-guide">
+        <summary>Где взять token и user ID</summary>
+        <div class="credential-guide-body">
+          <h3>Если Qobuz уже был подключён</h3>
+          <p>Откройте локальный <code>.env</code> прежней установки и перенесите только два значения:</p>
+          <dl>
+            <div><dt><code>QOBUZ_AUTH_TOKEN</code></dt><dd>в поле «Qobuz token»</dd></div>
+            <div><dt><code>QOBUZ_USER_ID</code></dt><dd>в поле «Qobuz user ID»</dd></div>
+          </dl>
+          <h3>Если нужен новый токен</h3>
+          <ol>
+            <li>Войдите в свой аккаунт в <a href="https://play.qobuz.com/" target="_blank" rel="noreferrer noopener">Qobuz Web Player</a>.</li>
+            <li>Откройте инструменты разработчика браузера, вкладку «Сеть» (Network), выберите Fetch/XHR и обновите страницу.</li>
+            <li>Откройте запрос к <code>open.qobuz.com</code>. Скопируйте значение <code>X-User-Auth-Token</code> или <code>user_auth_token</code>, а числовой <code>user_id</code> возьмите из запроса или ответа <code>user/get</code>.</li>
+          </ol>
+          <p class="credential-warning"><strong>Не используйте:</strong> пароль Qobuz, <code>app_secret</code>, <code>QOBUZ_INTERNAL_TOKEN</code> или ключ шифрования хранилища.</p>
+        </div>
+      </details>
+    `;
+  }
+  return `
+    <details class="credential-guide">
+      <summary>Где взять токен Яндекс Музыки</summary>
+      <div class="credential-guide-body">
+        <h3>Если Яндекс уже был подключён</h3>
+        <p>Перенесите значение <code>YANDEX_TOKEN</code> из локального <code>.env</code> прежней установки в поле ниже.</p>
+        <h3>Если нужен новый токен</h3>
+        <ol>
+          <li>Получите пользовательский OAuth-токен через <a href="https://yandex.com/dev/id/doc/en/concepts/ya-oauth-intro" target="_blank" rel="noreferrer noopener">официальную авторизацию Яндекс ID</a> в приложении, которому вы доверяете.</li>
+          <li>Разрешите доступ именно для аккаунта с подпиской Яндекс Музыки и вставьте выданный OAuth-токен в поле ниже.</li>
+          <li>Нажмите «Проверить и применить»: старый токен останется активным, если новый не пройдёт проверку.</li>
+        </ol>
+        <p class="credential-warning"><strong>Не используйте:</strong> пароль, cookie <code>Session_id</code>, <code>APP_AUTH_TOKEN</code>, внутренние ключи или токен неизвестного стороннего приложения.</p>
+      </div>
+    </details>
+  `;
+}
+
+function providerCredentialForm(provider) {
+  if (provider === "qobuz") {
+    return `
+      <form class="credential-form" id="qobuz-credential-form" autocomplete="off">
+        <h3>Обновить доступ</h3>
+        <p class="muted">Новый ключ будет проверен до активации. При ошибке текущий останется без изменений.</p>
+        <label for="qobuz-token">Qobuz token</label>
+        <input id="qobuz-token" name="token" type="password" autocomplete="off" required minlength="8">
+        <label for="qobuz-user-id">Qobuz user ID</label>
+        <input id="qobuz-user-id" name="user_id" type="password" inputmode="numeric" autocomplete="off" required>
+        <button type="submit">Проверить и применить</button>
+        <p class="form-error" role="alert"></p>
+      </form>
+    `;
+  }
+  return `
+    <form class="credential-form" id="yandex-credential-form" autocomplete="off">
+      <h3>Обновить доступ</h3>
+      <p class="muted">Новый ключ будет проверен до активации. При ошибке текущий останется без изменений.</p>
+      <label for="yandex-token">Токен Яндекс Музыки</label>
+      <input id="yandex-token" name="token" type="password" autocomplete="off" required minlength="8">
+      <button type="submit">Проверить и применить</button>
+      <p class="form-error" role="alert"></p>
+    </form>
+  `;
+}
+
+async function renderProviders() {
+  loadingPage("Состояние провайдеров");
+  try {
+    const data = await api("/api/providers/health");
+    app.innerHTML = shell(`
+      <main>
+        <section class="page-header">
+          <div>
+            <p class="eyebrow">ПОДКЛЮЧЕНИЯ</p>
+            <h1>Состояние провайдеров</h1>
+            <p class="lede">Аккаунт, API, служебный модуль и worker проверяются отдельно. Значения ключей здесь никогда не отображаются.</p>
+          </div>
+        </section>
+        <section class="provider-grid">${data.items.map(providerHealthCard).join("")}</section>
+      </main>
+    `);
+  } catch (exception) {
+    if (state.authenticated) showToast(exception.message);
+  }
+}
+
+async function rotateProvider(form) {
+  const provider = form.id.startsWith("qobuz") ? "qobuz" : "yandex";
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const values = new FormData(form);
+  const payload = provider === "qobuz"
+    ? { token: values.get("token"), user_id: values.get("user_id") }
+    : { token: values.get("token") };
+  form.reset();
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    await api(`/api/providers/${provider}/credentials`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    showToast("Новый ключ проверен и применён");
+    await renderProviders();
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+async function runProviderHealth(button) {
+  button.disabled = true;
+  try {
+    const job = await api(`/api/providers/${button.dataset.provider}/health-check`, {
+      method: "POST",
+    });
+    await waitForJob(job.id, "Проверка провайдера завершилась ошибкой");
+    await renderProviders();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
 }
 
 async function renderPlaylists() {
@@ -791,6 +965,8 @@ async function route() {
   const match = window.location.hash.match(/^#\/playlist\/(\d+)$/);
   if (match) {
     await renderPlaylist(Number(match[1]));
+  } else if (window.location.hash === "#/providers") {
+    await renderProviders();
   } else if (window.location.hash === "#/review") {
     await renderReview();
   } else {
@@ -803,9 +979,14 @@ async function route() {
 }
 
 app.addEventListener("submit", (event) => {
-  if (event.target.id !== "login-form") return;
-  event.preventDefault();
-  login(event.target);
+  if (event.target.id === "login-form") {
+    event.preventDefault();
+    login(event.target);
+  }
+  if (["qobuz-credential-form", "yandex-credential-form"].includes(event.target.id)) {
+    event.preventDefault();
+    rotateProvider(event.target);
+  }
 });
 
 app.addEventListener("click", (event) => {
@@ -816,6 +997,7 @@ app.addEventListener("click", (event) => {
   if (action === "match") startMatching(button);
   if (action === "qobuz-fetch") qobuzFetchMissing(button);
   if (action === "yandex-fetch") yandexFetchMissing(button);
+  if (action === "provider-health") runProviderHealth(button);
   if (action === "resolve") resolveCandidate(button);
   if (action === "filter") {
     state.statusFilter = button.dataset.status;

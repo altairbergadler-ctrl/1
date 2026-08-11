@@ -26,6 +26,11 @@ from app.models import (
     ServiceEnum,
     utcnow,
 )
+from app.services.credentials import (
+    CredentialError,
+    get_credential_payload,
+    save_credential,
+)
 
 SPOTIFY_SCOPES = (
     "playlist-read-private",
@@ -348,8 +353,23 @@ def save_spotify_token(
         source = PlaylistSource(service=ServiceEnum.spotify)
         db.add(source)
 
-    source.access_token = parsed.access_token
-    source.refresh_token = parsed.refresh_token or source.refresh_token
+    previous_refresh = None
+    try:
+        previous_refresh = get_credential_payload(db, "spotify").get("refresh_token")
+    except CredentialError:
+        # Transitional fallback used only while the one-time migration is
+        # moving an existing deployment away from PlaylistSource plaintext.
+        previous_refresh = source.refresh_token
+    save_credential(
+        db,
+        "spotify",
+        {
+            "access_token": parsed.access_token,
+            "refresh_token": parsed.refresh_token or previous_refresh,
+        },
+    )
+    source.access_token = None
+    source.refresh_token = None
     source.expires_at = parsed.expires_at
     try:
         db.commit()
@@ -368,15 +388,26 @@ def _spotify_client_for_source(
 ) -> SpotifyApiClient:
     if not _is_spotify_source(source):
         raise SpotifyConfigurationError("Playlist source is not Spotify")
+    try:
+        credential = get_credential_payload(db, "spotify")
+    except CredentialError:
+        credential = {
+            "access_token": source.access_token,
+            "refresh_token": source.refresh_token,
+        }
     if source.expires_at is not None and source.expires_at <= utcnow() + timedelta(
         seconds=30
     ):
-        refreshed = refresh_spotify_token(source.refresh_token or "", oauth=oauth)
+        refreshed = refresh_spotify_token(
+            str(credential.get("refresh_token") or ""), oauth=oauth
+        )
         source = save_spotify_token(db, refreshed, source=source)
-    if not source.access_token:
+        credential = get_credential_payload(db, "spotify")
+    access_token = str(credential.get("access_token") or "").strip()
+    if not access_token:
         raise SpotifyTokenError("Spotify source has no access token")
     return spotipy.Spotify(
-        auth=source.access_token,
+        auth=access_token,
         requests_timeout=15,
         retries=3,
         status_retries=3,

@@ -4,6 +4,7 @@ sqlalchemy==2.0.*
 alembic==1.13.*
 psycopg2-binary==2.9.*
 celery[redis]==5.4.*
+cryptography==50.*
 redis==5.*
 pydantic==2.*
 pydantic-settings==2.*
