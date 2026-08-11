@@ -34,5 +34,9 @@ celery.conf.update(
             "schedule": settings.provider_health_interval_seconds,
             "args": ("yandex",),
         },
+        "google-drive-health": {
+            "task": "storage_health_check",
+            "schedule": settings.provider_health_interval_seconds,
+        },
     },
 )

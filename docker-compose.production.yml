@@ -19,7 +19,7 @@ services:
     volumes: !override []
 
   backend:
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log
     restart: unless-stopped
     mem_limit: 512m
     cpus: "0.75"
@@ -31,6 +31,9 @@ services:
         source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
         target: /music/library
         read_only: true
+      - type: bind
+        source: ${STORAGE_CACHE_HOST_PATH:-./data/storage-cache}
+        target: /music/cache
     ports: !override
       - "127.0.0.1:${BACKEND_HOST_PORT:-18000}:8000"
     healthcheck:
@@ -54,6 +57,9 @@ services:
       - type: bind
         source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
         target: /music/staging
+      - type: bind
+        source: ${STORAGE_CACHE_HOST_PATH:-./data/storage-cache}
+        target: /music/cache
 
   beat:
     restart: unless-stopped

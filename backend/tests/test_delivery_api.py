@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
@@ -8,6 +9,7 @@ from zipfile import ZIP_STORED, ZipFile
 from app.models import (
     Album,
     Artist,
+    DriveFileLocation,
     File,
     Match,
     MatchStatus,
@@ -15,6 +17,7 @@ from app.models import (
     PlaylistItem,
     PlaylistSource,
     ServiceEnum,
+    StorageAccount,
     Track,
 )
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
@@ -180,6 +183,107 @@ def test_delivery_rejects_a_catalog_path_outside_the_library(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Matched file is unavailable"
+
+
+def test_remote_track_range_and_mixed_playlist_zip_are_bit_perfect(
+    api_client, auth_headers, db, tmp_path, monkeypatch
+):
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(
+        "app.services.delivery.settings.music_library_path", str(library_root)
+    )
+    monkeypatch.setattr(
+        "app.services.delivery.settings.storage_cache_path", str(cache_root)
+    )
+    playlist, _album, entries = _seed_delivery(db, library_root)
+    item, track, path, content = entries[0]
+    file = track.files[0]
+    file.sha1 = hashlib.sha1(content).hexdigest()
+    file.path = None
+    account = StorageAccount(
+        provider="google_drive",
+        email="delivery@example.test",
+        label="Delivery Drive",
+        root_folder_id="root-id",
+        enabled=True,
+        priority=10,
+        state="healthy",
+        detail_code="drive_ready",
+        credential_version=1,
+    )
+    db.add(account)
+    db.flush()
+    db.add(
+        DriveFileLocation(
+            file_id=file.id,
+            account_id=account.id,
+            remote_file_id="remote-first",
+            remote_name=path.name,
+            size_bytes=len(content),
+            sha1=file.sha1,
+            state="healthy",
+        )
+    )
+    db.commit()
+
+    class FakeResponse:
+        def __init__(self, body, range_header=None):
+            self.status_code = 200
+            self.body = body
+            self.headers = {
+                "Content-Type": "application/octet-stream",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(len(body)),
+            }
+            if range_header:
+                start, end = range_header.removeprefix("bytes=").split("-")
+                start, end = int(start), int(end)
+                self.body = body[start : end + 1]
+                self.status_code = 206
+                self.headers["Content-Length"] = str(len(self.body))
+                self.headers["Content-Range"] = f"bytes {start}-{end}/{len(body)}"
+
+        def iter_bytes(self, chunk_size=1024 * 1024):
+            del chunk_size
+            yield self.body
+
+    class FakeDownload:
+        def __init__(self, body, range_header=None):
+            self.response = FakeResponse(body, range_header)
+
+        def close(self):
+            return None
+
+    class FakeClient:
+        def open_download(self, remote_file_id, *, range_header=None):
+            assert remote_file_id == "remote-first"
+            return FakeDownload(content, range_header)
+
+    monkeypatch.setattr(
+        "app.services.delivery.client_for_account", lambda _db, _account: FakeClient()
+    )
+
+    partial = api_client.get(
+        f"/api/download/track/{item.id}",
+        headers={**auth_headers, "Range": "bytes=2-6"},
+    )
+    archive_response = api_client.get(
+        f"/api/download/playlist/{playlist.id}",
+        headers=auth_headers,
+    )
+
+    assert partial.status_code == 206
+    assert partial.content == content[2:7]
+    assert partial.headers["content-range"] == f"bytes 2-6/{len(content)}"
+    assert archive_response.status_code == 200
+    with ZipFile(BytesIO(archive_response.content)) as archive:
+        names = archive.namelist()
+        assert archive.read(names[0]) == content
+        assert archive.read(names[1]) == entries[1][3]
+    assert cache_root.exists()
+    assert list(cache_root.iterdir()) == []
 
 
 def test_delivery_requires_auth_and_valid_resources(api_client, auth_headers):

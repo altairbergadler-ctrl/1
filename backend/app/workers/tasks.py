@@ -12,6 +12,7 @@ from app.models import (
     PlaylistItem,
     PlaylistSource,
     ServiceEnum,
+    StorageAccount,
     utcnow,
 )
 from app.services.musicbrainz import MusicBrainzClient, enrich_albums
@@ -29,6 +30,11 @@ from app.services.qobuz import (
 )
 from app.services.scanner import ScanAlreadyRunning, scan_library
 from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
+from app.services.storage import (
+    health_check_account,
+    migrate_local_library,
+    replicate_imported_files,
+)
 from app.services.yandex import import_yandex_playlists, refresh_yandex_playlist
 from app.services.yandex_acquisition import (
     YandexAcquisitionAuthError,
@@ -977,6 +983,27 @@ def qobuz_download_task(
                 "reason": "another library scan is already running",
             }
 
+        storage_payload = None
+        if scan_payload.get("status") == "completed":
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "replicating",
+                        "mode": mode,
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": scan_payload,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            storage_payload = replicate_imported_files(db, import_report)
+
         matching_payload = None
         if mode == "fetch_missing" and scan_payload.get("status") == "completed":
             # Этап 4 pipeline (только fetch-missing): повторный матчинг
@@ -993,6 +1020,7 @@ def qobuz_download_task(
                         "downloads": downloads,
                         "import": import_report,
                         "scan": scan_payload,
+                        "storage": storage_payload,
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),
@@ -1009,6 +1037,7 @@ def qobuz_download_task(
                 "downloads": downloads,
                 "import": import_report,
                 "scan": scan_payload,
+                "storage": storage_payload,
                 "matching": matching_payload,
             },
             ensure_ascii=False,
@@ -1141,6 +1170,163 @@ def provider_health_check_task(provider: str, job_id: int | None = None):
                 job.heartbeat_at = utcnow()
                 db.commit()
         return {"status": "failed", "provider": str(provider), "error": type(exc).__name__}
+    finally:
+        db.close()
+
+
+@celery.task(name="storage_health_check")
+def storage_health_check_task(
+    job_id: int | None = None,
+    account_id: int | None = None,
+):
+    """Check one or all Drive accounts without persisting credential material."""
+
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id) if job_id is not None else None
+        if job_id is not None and job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job is not None:
+            if job.status in (JobStatus.done, JobStatus.failed):
+                return {"status": job.status.value, "job_id": job.id}
+            job.status = JobStatus.running
+            job.error = None
+            job.heartbeat_at = utcnow()
+            db.commit()
+
+        query = select(StorageAccount).where(
+            StorageAccount.provider == "google_drive"
+        )
+        if account_id is not None:
+            query = query.where(StorageAccount.id == account_id)
+        else:
+            query = query.where(StorageAccount.enabled.is_(True))
+        accounts = list(db.scalars(query.order_by(StorageAccount.id)))
+        if account_id is not None and not accounts:
+            raise ValueError("Storage account does not exist")
+
+        items = []
+        for account in accounts:
+            checked = health_check_account(db, account)
+            db.commit()
+            items.append(
+                {
+                    "account_id": checked.id,
+                    "state": checked.state,
+                    "detail_code": checked.detail_code,
+                }
+            )
+        result = {"provider": "google_drive", "items": items}
+        if job is not None:
+            job = db.get(Job, job.id)
+            job.status = JobStatus.done
+            job.payload = json.dumps(result, separators=(",", ":"))
+            job.error = None
+            job.finished_at = utcnow()
+            job.heartbeat_at = utcnow()
+            db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(Job, job_id)
+            if job is not None and job.status not in (JobStatus.done, JobStatus.failed):
+                job.status = JobStatus.failed
+                job.error = f"Storage health check failed ({type(exc).__name__})"
+                job.finished_at = utcnow()
+                job.heartbeat_at = utcnow()
+                db.commit()
+        return {"status": "failed", "provider": "google_drive", "error": type(exc).__name__}
+    finally:
+        db.close()
+
+
+@celery.task(
+    bind=True,
+    name="storage_migration",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def storage_migration_task(self, job_id: int):
+    """Copy local catalog files to Drive and keep all local originals."""
+
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-storage-{job_id}")[:64]
+    try:
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "storage_migration",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            job = db.get(Job, job_id)
+            if job is None:
+                return {"status": "missing_job", "job_id": job_id}
+            return {"status": "already_finished", "job_id": job_id}
+        db.commit()
+
+        def update_progress(summary):
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {"phase": "copying", "storage": summary},
+                    separators=(",", ":"),
+                ),
+            )
+
+        summary = migrate_local_library(db, progress_callback=update_progress)
+        result = {"phase": "completed", "storage": summary}
+        _finish_job(
+            db,
+            job_id,
+            task_id,
+            json.dumps(result, separators=(",", ":")),
+        )
+        return result
+    except JobLeaseLost:
+        db.rollback()
+        return {"status": "lease_lost", "job_id": job_id}
+    except Exception as exc:
+        db.rollback()
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "storage_migration",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.failed,
+                error=f"Storage migration failed ({type(exc).__name__})",
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is not None:
+            db.commit()
+        else:
+            db.rollback()
+        return {"status": "failed", "job_id": job_id, "error": type(exc).__name__}
     finally:
         db.close()
 
@@ -1310,6 +1496,26 @@ def yandex_download_task(self, job_id: int, playlist_id: int):
                 "reason": "another library scan is already running",
             }
 
+        storage_payload = None
+        if scan_payload.get("status") == "completed":
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "replicating",
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": scan_payload,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            storage_payload = replicate_imported_files(db, import_report)
+
         matching_payload = None
         if scan_payload.get("status") == "completed":
             _renew_job_lease(
@@ -1323,6 +1529,7 @@ def yandex_download_task(self, job_id: int, playlist_id: int):
                         "downloads": downloads,
                         "import": import_report,
                         "scan": scan_payload,
+                        "storage": storage_payload,
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),
@@ -1337,6 +1544,7 @@ def yandex_download_task(self, job_id: int, playlist_id: int):
                 "downloads": downloads,
                 "import": import_report,
                 "scan": scan_payload,
+                "storage": storage_payload,
                 "matching": matching_payload,
             },
             ensure_ascii=False,

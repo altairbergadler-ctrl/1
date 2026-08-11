@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -183,7 +184,9 @@ class File(Base):
     __tablename__ = "files"
     id = Column(Integer, primary_key=True)
     track_id = Column(ForeignKey("tracks.id"), nullable=False)
-    path = Column(Text, unique=True, nullable=False)
+    # A local path is an optional cache/source once a verified remote location
+    # exists.  The catalog row remains stable when the local copy is evicted.
+    path = Column(Text, unique=True, nullable=True)
     format = Column(String(16))
     bit_depth = Column(Integer)
     sample_rate = Column(Integer)
@@ -191,6 +194,11 @@ class File(Base):
     sha1 = Column(String(40), unique=True, nullable=False)
     scanned_at = Column(DateTime, default=utcnow)
     track = relationship("Track", back_populates="files")
+    drive_locations = relationship(
+        "DriveFileLocation",
+        back_populates="file",
+        cascade="all, delete-orphan",
+    )
 
 
 class Match(Base):
@@ -246,6 +254,17 @@ class Job(Base):
             ),
             sqlite_where=text(
                 "type = 'run_matching' AND status IN ('pending', 'running')"
+            ),
+        ),
+        Index(
+            "uq_jobs_active_storage_migration",
+            "type",
+            unique=True,
+            postgresql_where=text(
+                "type = 'storage_migration' AND status IN ('pending', 'running')"
+            ),
+            sqlite_where=text(
+                "type = 'storage_migration' AND status IN ('pending', 'running')"
             ),
         ),
     )
@@ -323,4 +342,94 @@ class ProviderHealth(Base):
             "provider", "component", name="uq_provider_health_provider_component"
         ),
         Index("ix_provider_health_provider", "provider"),
+    )
+
+
+class StorageAccount(Base):
+    """One independently authorized Google Drive quota pool."""
+
+    __tablename__ = "storage_accounts"
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(32), nullable=False, default="google_drive")
+    email = Column(String(320), nullable=False, unique=True)
+    label = Column(String(512))
+    root_folder_id = Column(String(256), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    priority = Column(Integer, nullable=False, default=0)
+    state = Column(String(32), nullable=False, default="healthy")
+    detail_code = Column(String(64))
+    quota_limit_bytes = Column(BigInteger)
+    quota_usage_bytes = Column(BigInteger)
+    quota_trash_bytes = Column(BigInteger)
+    credential_version = Column(Integer, nullable=False, default=1)
+    last_checked_at = Column(DateTime)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    locations = relationship("DriveFileLocation", back_populates="account")
+    __table_args__ = (
+        Index("ix_storage_accounts_enabled_priority", "enabled", "priority"),
+    )
+
+
+class StorageSecret(Base):
+    """AEAD envelope for OAuth application or account material."""
+
+    __tablename__ = "storage_secrets"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(256), nullable=False, unique=True)
+    account_id = Column(
+        ForeignKey("storage_accounts.id", ondelete="CASCADE"), nullable=True
+    )
+    ciphertext = Column(Text, nullable=False)
+    nonce = Column(String(64), nullable=False)
+    key_id = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    validated_at = Column(DateTime)
+    __table_args__ = (Index("ix_storage_secrets_account_id", "account_id"),)
+
+
+class StorageOAuthState(Base):
+    """Single-use hashed OAuth state with an encrypted PKCE verifier."""
+
+    __tablename__ = "storage_oauth_states"
+    id = Column(Integer, primary_key=True)
+    state_hash = Column(String(64), nullable=False, unique=True)
+    secret_id = Column(
+        ForeignKey("storage_secrets.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    __table_args__ = (Index("ix_storage_oauth_states_expires_at", "expires_at"),)
+
+
+class DriveFileLocation(Base):
+    """Verified Google Drive object backing one logical catalog file."""
+
+    __tablename__ = "drive_file_locations"
+    id = Column(Integer, primary_key=True)
+    file_id = Column(ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(
+        ForeignKey("storage_accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    remote_file_id = Column(String(256), nullable=False)
+    remote_name = Column(String(1024), nullable=False)
+    size_bytes = Column(BigInteger, nullable=False)
+    sha1 = Column(String(40), nullable=False)
+    state = Column(String(32), nullable=False, default="healthy")
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    verified_at = Column(DateTime, default=utcnow, nullable=False)
+    file = relationship("File", back_populates="drive_locations")
+    account = relationship("StorageAccount", back_populates="locations")
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "remote_file_id", name="uq_drive_location_account_remote"
+        ),
+        UniqueConstraint(
+            "file_id", "account_id", name="uq_drive_location_file_account"
+        ),
+        Index("ix_drive_file_locations_file_id", "file_id"),
+        Index("ix_drive_file_locations_account_id", "account_id"),
     )

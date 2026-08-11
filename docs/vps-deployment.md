@@ -11,6 +11,7 @@
 - Qobuz и Yandex control networks остаются `internal`;
 - для каждого постоянного контейнера заданы лимиты RAM, CPU и PID;
 - backend работает без `--reload`, а код берётся из собранного image;
+- Uvicorn access log отключён, поэтому OAuth `code` не попадает в журналы;
 - Docker использует отдельный address pool `172.30.0.0/16`, локальный log
   driver с ротацией и не меняет политику IP forwarding, необходимую VPN.
 
@@ -26,7 +27,8 @@ bash deploy/vps/bootstrap-runtime.sh
 
 - `/etc/audiofeel/music-service.env` с правами `0600`;
 - независимые 32-byte credential keys в `/etc/audiofeel/secrets`;
-- `/srv/audiofeel/library` и `/srv/audiofeel/staging`;
+- `/srv/audiofeel/library`, `/srv/audiofeel/staging` и временный
+  `/srv/audiofeel/cache` для проверенной сборки ZIP из Drive;
 - случайные PostgreSQL, PWA и внутренние sidecar secrets без вывода значений.
 
 Существующий env и существующие ключи скрипт не заменяет.
@@ -87,3 +89,8 @@ docker compose \
 TLS reverse proxy подключается к `127.0.0.1:18080`. До завершения DNS/TLS
 приёмки контейнеры остаются доступны только с VPS. Provider account tokens
 вводятся позднее через PWA и не хранятся в env.
+
+Google OAuth Client secret и refresh tokens также вводятся только через
+`PWA -> Хранилище`, проверяются до активации и шифруются внешним ключом.
+Callback production-приложения:
+`https://audiofeel.su/api/storage/google/callback`.

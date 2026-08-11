@@ -28,6 +28,32 @@ class Settings(BaseSettings):
     provider_health_interval_seconds: int = Field(default=30 * 60, ge=60)
     provider_health_stale_seconds: int = Field(default=90 * 60, ge=120)
     provider_health_manual_cooldown_seconds: int = Field(default=60, ge=10)
+
+    # Google Drive is the primary durable object store. Local library files
+    # remain a verified source/cache and are never evicted implicitly.
+    storage_primary_backend: str = Field(
+        default="google_drive", pattern="^(google_drive|local)$"
+    )
+    storage_cache_path: str = "/music/cache"
+    storage_cache_max_bytes: int = Field(
+        default=20 * 1024 * 1024 * 1024, ge=64 * 1024 * 1024
+    )
+    google_drive_redirect_uri: str = (
+        "https://audiofeel.su/api/storage/google/callback"
+    )
+    google_drive_oauth_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=3600)
+    google_drive_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    google_drive_read_timeout_seconds: float = Field(default=5 * 60, ge=30, le=3600)
+    google_drive_upload_chunk_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=256 * 1024,
+        le=256 * 1024 * 1024,
+        multiple_of=256 * 1024,
+    )
+    google_drive_upload_retry_attempts: int = Field(default=5, ge=1, le=10)
+    google_drive_min_free_bytes: int = Field(
+        default=1024 * 1024 * 1024, ge=0
+    )
     # Lossless file-info signing is isolated in an internal sidecar. The
     # Python app keeps the OAuth token, validates FLAC and never accepts lossy
     # fallback responses.

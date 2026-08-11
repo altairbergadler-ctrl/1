@@ -11,11 +11,13 @@ RUNTIME_ROOT=/etc/audiofeel
 SECRET_ROOT=${RUNTIME_ROOT}/secrets
 LIBRARY_ROOT=/srv/audiofeel/library
 STAGING_ROOT=/srv/audiofeel/staging
+CACHE_ROOT=/srv/audiofeel/cache
 ENV_FILE=${RUNTIME_ROOT}/music-service.env
 
 install -d -m 0750 "${APP_ROOT}" "${RUNTIME_ROOT}" "${LIBRARY_ROOT}"
 install -d -m 0700 "${SECRET_ROOT}"
 install -d -m 0750 -o 10001 -g 10001 "${STAGING_ROOT}"
+install -d -m 0750 "${CACHE_ROOT}"
 
 umask 077
 
@@ -53,6 +55,10 @@ if [[ ! -e "${ENV_FILE}" ]]; then
     printf 'MUSIC_LIBRARY_PATH=/music/library\n'
     printf 'MUSIC_LIBRARY_HOST_PATH=%s\n' "${LIBRARY_ROOT}"
     printf 'QOBUZ_STAGING_HOST_PATH=%s\n' "${STAGING_ROOT}"
+    printf 'STORAGE_CACHE_HOST_PATH=%s\n' "${CACHE_ROOT}"
+    printf 'STORAGE_CACHE_PATH=/music/cache\n'
+    printf 'STORAGE_PRIMARY_BACKEND=google_drive\n'
+    printf 'GOOGLE_DRIVE_REDIRECT_URI=https://audiofeel.su/api/storage/google/callback\n'
     printf 'PROVIDER_CREDENTIAL_KEY_HOST_FILE=%s\n' "${SECRET_ROOT}/provider-credentials.key"
     printf 'QOBUZ_CREDENTIAL_KEY_HOST_FILE=%s\n' "${SECRET_ROOT}/qobuz-credentials.key"
     printf 'QOBUZ_INTERNAL_TOKEN=%s\n' "${qobuz_internal_token}"
@@ -72,5 +78,20 @@ if [[ ! -e "${ENV_FILE}" ]]; then
 
   unset postgres_password app_auth_token qobuz_internal_token yandex_internal_token
 fi
+
+ensure_env_default() {
+  local name=$1
+  local value=$2
+  if ! grep -q "^${name}=" "${ENV_FILE}"; then
+    printf '%s=%s\n' "${name}" "${value}" >>"${ENV_FILE}"
+  fi
+}
+
+ensure_env_default STORAGE_CACHE_HOST_PATH "${CACHE_ROOT}"
+ensure_env_default STORAGE_CACHE_PATH /music/cache
+ensure_env_default STORAGE_PRIMARY_BACKEND google_drive
+ensure_env_default GOOGLE_DRIVE_REDIRECT_URI \
+  https://audiofeel.su/api/storage/google/callback
+chmod 0600 "${ENV_FILE}"
 
 printf 'audiofeel runtime: ready (credentials not displayed)\n'

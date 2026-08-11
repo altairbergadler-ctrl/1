@@ -644,7 +644,7 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
             db.delete(same_path)
             db.flush()
             _prune_orphaned_track(db, stale_track_id)
-        if not Path(same_hash.path).exists():
+        if same_hash.path is None or not Path(same_hash.path).exists():
             old_track = same_hash.track
             old_track_id = same_hash.track_id
             artist = _get_or_create_artist(db, metadata)
@@ -706,8 +706,19 @@ def _prune_missing_files(
     removed = 0
     library_files = db.scalars(select(LibraryFile)).all()
     for library_file in library_files:
+        if not library_file.path:
+            continue
         stored_path = Path(library_file.path).expanduser().resolve()
         if not stored_path.is_relative_to(root_path) or stored_path in present_paths:
+            continue
+
+        # A verified Drive object keeps the logical catalog row alive. The
+        # local path becomes an empty cache slot instead of invalidating
+        # matches or deleting remote location metadata.
+        if library_file.drive_locations:
+            library_file.path = None
+            library_file.scanned_at = utcnow()
+            db.flush()
             continue
 
         track_id = library_file.track_id

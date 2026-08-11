@@ -713,6 +713,127 @@ button[disabled] {
   margin-top: 8px;
 }
 
+.storage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.storage-summary > span,
+.storage-quota > span {
+  display: grid;
+  gap: 4px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgb(13 17 21 / 52%);
+}
+
+.storage-summary strong,
+.storage-quota strong {
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: 500;
+}
+
+.storage-summary small,
+.storage-quota small {
+  color: var(--muted);
+}
+
+.storage-guide {
+  margin-bottom: 22px;
+}
+
+.storage-config-card,
+.storage-account-card {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgb(27 34 41 / 96%), rgb(20 25 31 / 96%));
+  box-shadow: var(--shadow);
+}
+
+.storage-config-card {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(320px, 1.2fr);
+  gap: 28px;
+  margin-bottom: 22px;
+}
+
+.storage-config-card h2 {
+  font-size: 34px;
+}
+
+.storage-config-card form,
+.storage-account-form {
+  display: grid;
+  gap: 9px;
+}
+
+.storage-config-card label,
+.storage-account-form label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.storage-config-card input,
+.storage-account-form input[type="number"] {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: #0d1115;
+}
+
+.storage-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 18px;
+}
+
+.storage-account-card h2 {
+  font-size: 30px;
+}
+
+.storage-email {
+  margin: 7px 0 0;
+  font-size: 13px;
+}
+
+.storage-quota {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.storage-account-form {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.storage-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.storage-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.provider-state.not_configured {
+  color: var(--muted);
+}
+
 .login-page,
 .boot-screen {
   display: grid;
@@ -846,6 +967,12 @@ button[disabled] {
   .credential-guide-body dl div {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+
+  .storage-summary,
+  .storage-config-card,
+  .storage-quota {
+    grid-template-columns: 1fr;
   }
 }
 

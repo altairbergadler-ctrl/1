@@ -20,6 +20,11 @@ def test_yandex_download_task_is_registered():
     assert "yandex_download" in celery.tasks
 
 
+def test_google_drive_tasks_are_registered():
+    assert "storage_health_check" in celery.tasks
+    assert "storage_migration" in celery.tasks
+
+
 def test_scan_task_updates_job_lifecycle(session_factory, monkeypatch, tmp_path):
     session = session_factory()
     job = Job(type="scan_library", status=JobStatus.pending, payload="{}")

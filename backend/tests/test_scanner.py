@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from app.models import (
     Album,
     Artist,
+    DriveFileLocation,
     File,
     Match,
     MatchStatus,
@@ -19,6 +20,7 @@ from app.models import (
     PlaylistItem,
     PlaylistSource,
     ServiceEnum,
+    StorageAccount,
     Track,
 )
 from app.services import scanner as scanner_service
@@ -182,6 +184,48 @@ def test_deleted_file_is_removed_from_catalog(db, three_flac_library):
     assert _count(db, File) == 2
     assert _count(db, Track) == 2
     assert db.scalar(select(Artist).where(Artist.name == "Fallback Artist")) is None
+
+
+def test_deleted_local_cache_keeps_verified_drive_catalog_row(
+    db, three_flac_library
+):
+    scan_library(db, three_flac_library)
+    deleted = next(three_flac_library.rglob("03 - Fallback Title.flac"))
+    library_file = db.scalar(select(File).where(File.path == str(deleted.resolve())))
+    track_id = library_file.track_id
+    account = StorageAccount(
+        provider="google_drive",
+        email="scanner@example.test",
+        label="Scanner Drive",
+        root_folder_id="root-id",
+        enabled=True,
+        priority=0,
+        state="healthy",
+        credential_version=1,
+    )
+    db.add(account)
+    db.flush()
+    db.add(
+        DriveFileLocation(
+            file_id=library_file.id,
+            account_id=account.id,
+            remote_file_id="remote-id",
+            remote_name=deleted.name,
+            size_bytes=library_file.size_bytes,
+            sha1=library_file.sha1,
+            state="healthy",
+        )
+    )
+    db.commit()
+    deleted.unlink()
+
+    result = scan_library(db, three_flac_library)
+    db.refresh(library_file)
+
+    assert result.removed == 0
+    assert library_file.path is None
+    assert db.get(Track, track_id) is not None
+    assert db.query(DriveFileLocation).count() == 1
 
 
 def test_deleting_last_file_invalidates_ready_match(db, three_flac_library):

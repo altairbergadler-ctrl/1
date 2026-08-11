@@ -64,13 +64,16 @@ services:
     secrets:
       - provider_credential_key
       - qobuz_credential_key
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
     volumes:
       - ./backend:/code
       - type: bind
         source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
         target: /music/library
         read_only: true
+      - type: bind
+        source: ${STORAGE_CACHE_HOST_PATH:-./data/storage-cache}
+        target: /music/cache
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:
@@ -118,6 +121,9 @@ services:
       - type: bind
         source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
         target: /music/staging
+      - type: bind
+        source: ${STORAGE_CACHE_HOST_PATH:-./data/storage-cache}
+        target: /music/cache
     depends_on:
       db:
         condition: service_healthy

@@ -317,3 +317,53 @@ class ProviderCredentialOut(BaseModel):
     version: int
     updated_at: datetime
     label: str | None = None
+
+
+class GoogleOAuthConfigIn(BaseModel):
+    client_id: str = Field(min_length=20, max_length=512)
+    client_secret: SecretStr = Field(min_length=8, max_length=4096)
+
+
+class GoogleOAuthConfigOut(BaseModel):
+    configured: bool
+    version: int | None = None
+    updated_at: datetime | None = None
+    pending: bool = False
+
+
+class GoogleOAuthStartOut(BaseModel):
+    authorization_url: str
+
+
+class StorageAccountOut(BaseModel):
+    id: int
+    provider: str
+    email: str
+    label: str | None = None
+    enabled: bool
+    priority: int
+    state: str
+    detail_code: str | None = None
+    quota_limit_bytes: int | None = None
+    quota_usage_bytes: int | None = None
+    quota_trash_bytes: int | None = None
+    free_bytes: int | None = None
+    credential_version: int
+    last_checked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class StorageOverviewOut(BaseModel):
+    primary_backend: str
+    configured: bool
+    oauth: GoogleOAuthConfigOut
+    accounts: list[StorageAccountOut]
+    total_limit_bytes: int | None = None
+    total_usage_bytes: int
+    total_free_bytes: int | None = None
+
+
+class StorageAccountUpdateIn(BaseModel):
+    enabled: bool | None = None
+    priority: int | None = Field(default=None, ge=-1000, le=1000)

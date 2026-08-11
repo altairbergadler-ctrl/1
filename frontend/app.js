@@ -103,6 +103,7 @@ function shell(content) {
           </span>
         </a>
         <nav class="nav-actions" aria-label="Основная навигация">
+          <a class="button ghost small" href="#/storage">Хранилище</a>
           <a class="button ghost small" href="#/providers">Провайдеры</a>
           <a class="button ghost small" href="#/review">Review</a>
           <button class="ghost small" type="button" data-action="logout">Выйти</button>
@@ -392,6 +393,231 @@ async function runProviderHealth(button) {
     });
     await waitForJob(job.id, "Проверка провайдера завершилась ошибкой");
     await renderProviders();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+function formatBytes(value) {
+  if (value === null || value === undefined) return "без фиксированного лимита";
+  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ"];
+  let number = Math.max(0, Number(value) || 0);
+  let unit = 0;
+  while (number >= 1024 && unit < units.length - 1) {
+    number /= 1024;
+    unit += 1;
+  }
+  const digits = number >= 100 || unit === 0 ? 0 : number >= 10 ? 1 : 2;
+  return `${number.toFixed(digits)} ${units[unit]}`;
+}
+
+function storageAccountCard(account) {
+  const usagePercent = account.quota_limit_bytes
+    ? Math.min(100, Math.round((account.quota_usage_bytes || 0) * 100 / account.quota_limit_bytes))
+    : 0;
+  const checked = account.last_checked_at
+    ? new Date(account.last_checked_at).toLocaleString("ru-RU")
+    : "ещё не проверялся";
+  return `
+    <article class="storage-account-card">
+      <div class="provider-heading">
+        <div>
+          <span class="source-badge">google drive</span>
+          <h2>${escapeHtml(account.label || account.email)}</h2>
+          <p class="muted storage-email">${escapeHtml(account.email)}</p>
+        </div>
+        <span class="provider-state ${escapeHtml(account.state)}">${escapeHtml(providerStateLabels[account.state] || account.state)}</span>
+      </div>
+      ${account.quota_limit_bytes ? `
+        <div class="progress" aria-label="Использовано ${usagePercent}%"><span style="width:${usagePercent}%"></span></div>
+      ` : ""}
+      <div class="storage-quota">
+        <span><strong>${formatBytes(account.quota_usage_bytes)}</strong><small>использовано</small></span>
+        <span><strong>${formatBytes(account.free_bytes)}</strong><small>свободно</small></span>
+      </div>
+      <p class="muted provider-version">Проверено: ${escapeHtml(checked)} · версия доступа ${account.credential_version}</p>
+      <form class="storage-account-form" data-account-id="${account.id}">
+        <label class="storage-toggle">
+          <input name="enabled" type="checkbox" ${account.enabled ? "checked" : ""}>
+          Использовать для новых файлов
+        </label>
+        <label>Приоритет
+          <input name="priority" type="number" min="-1000" max="1000" value="${account.priority}">
+        </label>
+        <div class="action-row">
+          <button class="secondary small" type="submit">Сохранить</button>
+          <button class="ghost small" type="button" data-action="storage-health" data-account-id="${account.id}">Проверить</button>
+        </div>
+        <p class="form-error" role="alert"></p>
+      </form>
+    </article>
+  `;
+}
+
+function googleDriveGuide() {
+  return `
+    <details class="credential-guide storage-guide" open>
+      <summary>Как подготовить доступ Google Drive</summary>
+      <div class="credential-guide-body">
+        <ol>
+          <li>В <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer noopener">Google Cloud Console</a> создайте отдельный проект Audiofeel.</li>
+          <li>Включите <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer noopener">Google Drive API</a>.</li>
+          <li>Настройте экран OAuth. Пока приложение в режиме тестирования, добавьте свои Google-адреса в список тестовых пользователей.</li>
+          <li>Создайте OAuth Client ID типа <strong>Web application</strong>.</li>
+          <li>В Authorized redirect URIs точно добавьте:<br><code>https://audiofeel.su/api/storage/google/callback</code></li>
+          <li>Скопируйте Client ID и Client secret в форму ниже. Сервис сначала проверит новый доступ и только затем сделает его активным.</li>
+        </ol>
+        <p class="credential-warning">Audiofeel запрашивает ограниченный доступ <code>drive.file</code>: приложение видит только созданные и выбранные через него файлы. Пароль Google вводится только на странице Google.</p>
+      </div>
+    </details>
+  `;
+}
+
+function consumeStorageCallbackNotice() {
+  const query = new URLSearchParams(window.location.search);
+  if (query.has("storage_connected")) {
+    showToast("Google Drive подключён и проверен");
+  } else if (query.has("storage_error")) {
+    const labels = {
+      oauth_denied: "Подключение Google отменено",
+      credential_rejected: "Google отклонил новые данные — прежний доступ сохранён",
+      provider_unavailable: "Google временно недоступен — прежний доступ сохранён",
+    };
+    showToast(labels[query.get("storage_error")] || "Не удалось подключить Google Drive");
+  } else {
+    return;
+  }
+  window.history.replaceState(null, "", `${window.location.pathname}#/storage`);
+}
+
+async function renderStorage() {
+  loadingPage("Хранилище Google Drive");
+  try {
+    const data = await api("/api/storage");
+    app.innerHTML = shell(`
+      <main>
+        <section class="page-header">
+          <div>
+            <p class="eyebrow">БИБЛИОТЕКА · GOOGLE DRIVE</p>
+            <h1>Общее облачное хранилище</h1>
+            <p class="lede">Каждый подключённый аккаунт добавляет свой свободный объём. Новые файлы попадают на здоровый диск с наибольшим запасом; локальные оригиналы не удаляются автоматически.</p>
+          </div>
+          <div class="action-row">
+            ${data.oauth.configured ? '<button type="button" data-action="storage-connect">Добавить аккаунт</button>' : ""}
+            ${data.accounts.length ? '<button class="secondary" type="button" data-action="storage-migrate">Скопировать локальную библиотеку</button>' : ""}
+          </div>
+        </section>
+        <section class="storage-summary">
+          <span><strong>${data.accounts.length}</strong><small>аккаунтов</small></span>
+          <span><strong>${formatBytes(data.total_usage_bytes)}</strong><small>использовано</small></span>
+          <span><strong>${formatBytes(data.accounts.length ? data.total_free_bytes : 0)}</strong><small>свободно суммарно</small></span>
+        </section>
+        ${googleDriveGuide()}
+        <section class="storage-config-card">
+          <div>
+            <p class="eyebrow">OAUTH-ПРИЛОЖЕНИЕ</p>
+            <h2>${data.oauth.configured ? "Доступ настроен" : "Первичная настройка"}</h2>
+            <p class="muted">Сохранённые Client secret и refresh tokens никогда не возвращаются в API. Новые данные проходят вход Google до замены действующих.</p>
+          </div>
+          <form id="google-oauth-form" autocomplete="off">
+            <label for="google-client-id">Client ID</label>
+            <input id="google-client-id" name="client_id" type="text" autocomplete="off" required minlength="20" placeholder="…apps.googleusercontent.com">
+            <label for="google-client-secret">Client secret</label>
+            <input id="google-client-secret" name="client_secret" type="password" autocomplete="new-password" required minlength="8">
+            <button type="submit">Проверить через Google</button>
+            <p class="form-error" role="alert"></p>
+          </form>
+        </section>
+        ${data.accounts.length
+          ? `<section class="storage-account-grid">${data.accounts.map(storageAccountCard).join("")}</section>`
+          : '<section class="empty-state"><h2>Аккаунты ещё не подключены</h2><p>Подготовьте OAuth-приложение по памятке и пройдите вход Google.</p></section>'}
+      </main>
+    `);
+    consumeStorageCallbackNotice();
+  } catch (exception) {
+    if (state.authenticated) showToast(exception.message);
+  }
+}
+
+async function configureGoogleOAuth(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const values = new FormData(form);
+  const payload = {
+    client_id: values.get("client_id"),
+    client_secret: values.get("client_secret"),
+  };
+  form.reset();
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    const result = await api("/api/storage/google/oauth-config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    window.location.assign(result.authorization_url);
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+async function connectGoogle(button) {
+  button.disabled = true;
+  try {
+    const result = await api("/api/storage/google/connect", { method: "POST" });
+    window.location.assign(result.authorization_url);
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+async function updateStorageAccount(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const values = new FormData(form);
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    await api(`/api/storage/accounts/${form.dataset.accountId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        enabled: values.get("enabled") === "on",
+        priority: Number(values.get("priority")),
+      }),
+    });
+    showToast("Настройки диска сохранены");
+    await renderStorage();
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+async function runStorageHealth(button) {
+  button.disabled = true;
+  try {
+    const job = await api(`/api/storage/accounts/${button.dataset.accountId}/health-check`, { method: "POST" });
+    await waitForJob(job.id, "Проверка Google Drive завершилась ошибкой");
+    showToast("Google Drive проверен");
+    await renderStorage();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+async function migrateLocalStorage(button) {
+  button.disabled = true;
+  try {
+    const job = await api("/api/storage/migrate-local", { method: "POST" });
+    showToast("Копирование в Google Drive запущено", 6000);
+    const finished = await waitForJob(job.id, "Копирование библиотеки завершилось ошибкой");
+    const summary = finished.payload?.storage || {};
+    showToast(`Google Drive: скопировано ${summary.uploaded || 0}, ошибок ${summary.failed || 0}`, 8000);
+    await renderStorage();
   } catch (exception) {
     showToast(exception.message);
     button.disabled = false;
@@ -965,6 +1191,8 @@ async function route() {
   const match = window.location.hash.match(/^#\/playlist\/(\d+)$/);
   if (match) {
     await renderPlaylist(Number(match[1]));
+  } else if (window.location.hash === "#/storage") {
+    await renderStorage();
   } else if (window.location.hash === "#/providers") {
     await renderProviders();
   } else if (window.location.hash === "#/review") {
@@ -987,6 +1215,14 @@ app.addEventListener("submit", (event) => {
     event.preventDefault();
     rotateProvider(event.target);
   }
+  if (event.target.id === "google-oauth-form") {
+    event.preventDefault();
+    configureGoogleOAuth(event.target);
+  }
+  if (event.target.matches(".storage-account-form")) {
+    event.preventDefault();
+    updateStorageAccount(event.target);
+  }
 });
 
 app.addEventListener("click", (event) => {
@@ -998,6 +1234,9 @@ app.addEventListener("click", (event) => {
   if (action === "qobuz-fetch") qobuzFetchMissing(button);
   if (action === "yandex-fetch") yandexFetchMissing(button);
   if (action === "provider-health") runProviderHealth(button);
+  if (action === "storage-connect") connectGoogle(button);
+  if (action === "storage-health") runStorageHealth(button);
+  if (action === "storage-migrate") migrateLocalStorage(button);
   if (action === "resolve") resolveCandidate(button);
   if (action === "filter") {
     state.statusFilter = button.dataset.status;

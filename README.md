@@ -254,6 +254,17 @@ Qobuz или будущему отдельному источнику.
 сопровождающего. Ответы кэшируются в Redis, общий лимит — не более одного
 внешнего запроса в секунду.
 
+## Google Drive
+
+Google Drive используется как основное долговременное хранилище. Несколько
+Google-аккаунтов образуют общий пул объёма: новый файл размещается на здоровом
+аккаунте с достаточным свободным местом, а при временной ошибке используется
+следующий. OAuth-приложение и аккаунты подключаются через `PWA -> Хранилище`;
+секреты в API не возвращаются и в `.env` не записываются.
+
+Подробная памятка, модель безопасности и приёмка:
+[`docs/google-drive-storage.md`](docs/google-drive-storage.md).
+
 ## Тесты
 
 ```bash
@@ -286,6 +297,8 @@ Sidecar отдельно проверяет allowlist,
 - `backend/app/services/normalize.py` — единые нормализованные ключи
 - `backend/app/services/matcher.py` — каскад сопоставления и review-кандидаты
 - `backend/app/services/delivery.py` — безопасная bit-perfect выдача
+- `backend/app/services/google_drive.py` — OAuth, resumable upload и Range
+- `backend/app/services/storage.py` — multi-account placement и миграция
 - `backend/app/workers/` — Celery-задачи
   (scan/import/matching/qobuz_download/yandex_download)
 - `frontend/` — адаптивная PWA и Nginx reverse proxy
