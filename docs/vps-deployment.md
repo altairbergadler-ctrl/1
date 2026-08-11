@@ -11,7 +11,7 @@
 - Qobuz и Yandex control networks остаются `internal`;
 - для каждого постоянного контейнера заданы лимиты RAM, CPU и PID;
 - backend работает без `--reload`, а код берётся из собранного image;
-- Uvicorn access log и frontend Nginx `/api` access log отключены; Caddy access
+- Uvicorn и весь frontend Nginx access log отключены; Caddy access
   log не включён, а runtime logger фильтрует OAuth query-параметры, поэтому
   `code`, `state` и tokens не попадают в штатные журналы;
 - Docker использует отдельный address pool `172.30.0.0/16`, локальный log

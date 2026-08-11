@@ -152,8 +152,9 @@ READY/REVIEW/MISSING, ручной review и скачивание трека, ZI
 создать приглашение, отключить пользователя и отозвать все его sessions.
 Service Worker кэширует только оболочку приложения; API и музыкальные файлы в
 кэш не попадают. Session и CSRF tokens не записываются в Web Storage. Nginx
-проксирует `/api/` без access log, поэтому cookie и скачивания работают в одном
-origin, а OAuth codes не попадают в access log.
+проксирует `/api/` в том же origin и полностью отключает access log, поэтому
+cookie и скачивания работают штатно, а OAuth codes и произвольный клиентский
+текст не записываются.
 
 ## Google Sign-In и private ownership
 
