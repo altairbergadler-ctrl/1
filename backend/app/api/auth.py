@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -50,6 +51,7 @@ from app.services.google_login import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _no_store(response: Response) -> None:
@@ -174,8 +176,20 @@ def google_callback(
         GoogleLoginStateError,
         GoogleIdentityError,
         AuthenticationError,
-        IntegrityError,
-    ):
+    ) as exc:
+        # These exception messages are controlled, value-free diagnostics.
+        # They intentionally identify only the failed validation class/check.
+        logger.warning(
+            "Google login rejected: %s (%s)",
+            type(exc).__name__,
+            str(exc),
+        )
+        db.rollback()
+        response = _auth_error_page(400, "Попробуйте начать вход заново.")
+        _delete_cookie(response, name=OIDC_BINDING_COOKIE_NAME, path="/api/auth/google/callback")
+        return response
+    except IntegrityError:
+        logger.warning("Google login rejected: database integrity conflict")
         db.rollback()
         response = _auth_error_page(400, "Попробуйте начать вход заново.")
         _delete_cookie(response, name=OIDC_BINDING_COOKIE_NAME, path="/api/auth/google/callback")
