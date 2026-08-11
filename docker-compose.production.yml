@@ -1,0 +1,96 @@
+services:
+  db:
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: "0.50"
+    pids_limit: 200
+
+  redis:
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 100
+
+  migrate:
+    restart: "no"
+    mem_limit: 512m
+    cpus: "0.75"
+    pids_limit: 160
+    volumes: !override []
+
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: "0.75"
+    pids_limit: 256
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: !override
+      - type: bind
+        source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
+        target: /music/library
+        read_only: true
+    ports: !override
+      - "127.0.0.1:${BACKEND_HOST_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: "1.00"
+    pids_limit: 256
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: !override
+      - type: bind
+        source: ${MUSIC_LIBRARY_HOST_PATH:-./data/music}
+        target: /music/library
+      - type: bind
+        source: ${QOBUZ_STAGING_HOST_PATH:-./data/qobuz-staging}
+        target: /music/staging
+
+  beat:
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 128
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+
+  yandex-signer:
+    restart: unless-stopped
+    mem_limit: 96m
+    cpus: "0.25"
+    pids_limit: 64
+
+  qobuz-sidecar:
+    restart: unless-stopped
+    mem_limit: 384m
+    cpus: "0.50"
+    pids_limit: 128
+
+  qobuz-egress:
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: "0.25"
+    pids_limit: 96
+
+  frontend:
+    restart: unless-stopped
+    mem_limit: 96m
+    cpus: "0.25"
+    pids_limit: 96
+    ports: !override
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-18080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
