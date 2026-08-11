@@ -23,7 +23,9 @@ Google `sub`. Смена email у уже привязанного Google-акк�
 Один Google Cloud project допустим, но client IDs, client secrets и redirect
 URI не смешиваются. Drive refresh token, storage account и Drive client secret
 никогда не участвуют во входе пользователей. Google access token и ID token
-после проверки входа не записываются в БД.
+после проверки входа не записываются в БД. Если ID token содержит `at_hash`,
+Google access token используется только в памяти для проверки этого claim и
+сразу отбрасывается; он не попадает в session, API, cookie или логи.
 
 Официальные ссылки:
 
@@ -284,3 +286,9 @@ library/Drive objects и автоматическое удаление user data
 13. backend/frontend/worker/beat/PostgreSQL/Redis/sidecars healthy, Celery pong;
 14. полный Docker pytest и live-PWA проходят;
 15. local SHA, GitHub branch SHA и deployed release SHA совпадают.
+
+Production snapshot 2026-08-12: пункты 1–4, 10–15 для bootstrap owner
+проверены, включая реальный Google callback, backup restore-test, logout,
+recovery revoke, независимый Drive account, health/Celery и log leak scan.
+Пункты 5–9 и disable второго пользователя ожидают второй реальный Google
+account; одна browser-сессия не считается двухаккаунтной приёмкой.

@@ -1,8 +1,9 @@
 # Music Service MVP: handoff для новых чатов
 
 Актуально на: 2026-08-12
-Статус: Google Sign-In/multi-user реализованы и прошли локальный security gate;
-production Google/двухаккаунтная приёмка выполняется отдельно по runbook.
+Статус: Google Sign-In/multi-user реализованы, развёрнуты и прошли локальный
+security gate и реальный production owner flow. Для полного закрытия итерации
+нужен второй реальный Google account: в доступной browser-сессии сейчас один.
 Предыдущая production-опора до этой миграции:
 `22ea6ee592d9e8f314129fadf79ce276ed57f603`.
 
@@ -91,7 +92,7 @@ hot rotation без restart.
 
 ### 3.1 Google Sign-In / multi-user gate 2026-08-12
 
-- полный Docker pytest с live-PWA: `292 passed`;
+- полный Docker pytest с production live-PWA: `293 passed`;
 - live-PWA contract на собранном Nginx image: `9 passed`;
 - отдельные OIDC/JWKS/state/PKCE/invitation/session/CSRF/IDOR тесты: проходят;
 - JavaScript syntax и PWA static contract: проходят;
@@ -102,12 +103,40 @@ hot rotation без restart.
 - global Spotify envelope восстановлена после rollback, а на head находится
   только в user vault и migration backup.
 
-Фактическая production-приёмка и финальный Git/deployed SHA дописываются сюда
-только после backup restore-test и реального входа двумя Google accounts.
+Фактическая production-проверка 2026-08-12:
+
+- pre-migration PostgreSQL custom dump создан, `pg_restore --list` прошёл;
+  dump восстановлен в отдельную БД, revision и все контрольные counts совпали,
+  проверочная БД удалена;
+- production мигрирован `0007 -> 0009`: сохранены 2 sources, 4 playlists,
+  105 items, 14 jobs, 16 `File` и 16 Drive locations; 7 user jobs получили
+  owner, 7 system jobs остались без user; storage account остался один;
+- отдельный `Audiofeel Login` client работает с callback
+  `/api/auth/google/callback`; существующий Drive client и storage account не
+  изменены, Google consent не содержит Drive scopes;
+- реальный bootstrap owner прошёл invitation binding и повторный вход по тому
+  же `google_sub`; users count остался 1;
+- Google `at_hash` проверяется с access token только в памяти; access/ID token
+  не сохраняются и не возвращаются;
+- logout и owner recovery revoke немедленно оставили 0 live sessions;
+  session и CSRF hashes в PostgreSQL имеют фиксированную длину 32 bytes;
+- exact-value scan Caddy/backend/frontend logs после OAuth flow: 0 совпадений
+  с email, OAuth code/state, Login client credentials; query filter Caddy
+  включён;
+- backend/frontend/PostgreSQL/Redis/sidecars healthy, worker/beat running,
+  Celery `pong`, Alembic `0009`, production live-PWA `9 passed`.
+
+Остаются непроверенными только сценарии, для которых физически нужен второй
+Google identity: uninvited `403` до invitation, second-user first login,
+A/B IDOR/download grants, общий `File` для двух users, независимый второй
+Spotify OAuth credential и disable чужого пользователя. Их unit/integration
+coverage зелёный, но это не заменяет обязательную двухаккаунтную production-
+приёмку.
 
 Команда полного локального теста с live-PWA:
 
 ```powershell
+docker compose up -d --build frontend
 docker compose run --rm `
   -v "${PWD}/frontend:/frontend:ro" `
   -e DATABASE_URL=sqlite+pysqlite:///:memory: `

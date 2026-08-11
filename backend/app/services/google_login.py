@@ -80,6 +80,12 @@ class GoogleIdentity:
     display_name: str | None
 
 
+@dataclass(frozen=True, repr=False)
+class GoogleTokenResponse:
+    id_token: str
+    access_token: str
+
+
 _cache_lock = threading.Lock()
 _metadata_cache: tuple[float, dict[str, Any]] | None = None
 _jwks_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
@@ -293,7 +299,7 @@ def discard_google_login(db: Session, *, state: str, binding: str) -> None:
     _consume_attempt(db, state, binding)
 
 
-def _exchange_code(code: str, verifier: str) -> str:
+def _exchange_code(code: str, verifier: str) -> GoogleTokenResponse:
     if not code or len(code) > 4096:
         raise GoogleIdentityError("Google authorization code is invalid")
     metadata = _metadata()
@@ -318,14 +324,22 @@ def _exchange_code(code: str, verifier: str) -> str:
     except Exception as exc:
         raise GoogleLoginUnavailable("Google token exchange is unavailable") from exc
     token = payload.get("id_token") if isinstance(payload, dict) else None
+    access_token = payload.get("access_token") if isinstance(payload, dict) else None
     if not isinstance(token, str) or not token or len(token) > 32_768:
         raise GoogleIdentityError("Google token response has no identity token")
-    return token
+    if (
+        not isinstance(access_token, str)
+        or not access_token
+        or len(access_token) > 32_768
+    ):
+        raise GoogleIdentityError("Google token response has no access token")
+    return GoogleTokenResponse(id_token=token, access_token=access_token)
 
 
 def validate_google_id_token(
     token: str,
     *,
+    google_access_token: str | None = None,
     expected_nonce_hash: bytes,
     attempt_created_at,
 ) -> GoogleIdentity:
@@ -350,16 +364,13 @@ def validate_google_id_token(
             algorithms=["RS256"],
             audience=client_id,
             issuer=EXPECTED_ISSUER,
+            access_token=google_access_token,
             options={
                 "require_aud": True,
                 "require_exp": True,
                 "require_iat": True,
                 "require_iss": True,
                 "require_sub": True,
-                # Authorization Code Flow does not retain or use Google's
-                # access token.  python-jose otherwise requires that token
-                # solely to validate Google's optional at_hash claim.
-                "verify_at_hash": False,
                 "leeway": settings.google_login_clock_skew_seconds,
             },
         )
@@ -447,11 +458,14 @@ def complete_google_login(
         attempt.pkce_nonce,
         attempt.key_id,
     )
+    token_response = _exchange_code(code, verifier)
     identity = validate_google_id_token(
-        _exchange_code(code, verifier),
+        token_response.id_token,
+        google_access_token=token_response.access_token,
         expected_nonce_hash=attempt.nonce_hash,
         attempt_created_at=attempt.created_at,
     )
+    del token_response
     _, email_key = normalize_email(identity.email)
     lock_identity_mutation(db)
     user = db.scalar(

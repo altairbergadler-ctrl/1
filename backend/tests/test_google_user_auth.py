@@ -89,10 +89,11 @@ def google_config(tmp_path, monkeypatch):
     google_login.clear_google_oidc_cache()
 
 
-def _validate(monkeypatch, private_pem, public_jwk, claims):
+def _validate(monkeypatch, private_pem, public_jwk, claims, *, access_token=None):
     monkeypatch.setattr(google_login, "_jwks", lambda **_: {public_jwk["kid"]: public_jwk})
     return google_login.validate_google_id_token(
         _signed_token(private_pem, public_jwk["kid"], claims),
+        google_access_token=access_token,
         expected_nonce_hash=keyed_digest("google-nonce-v1", "login-nonce"),
         attempt_created_at=utcnow() - timedelta(seconds=2),
     )
@@ -147,16 +148,34 @@ def test_oidc_accepts_multiple_audiences_only_with_matching_azp(
     assert identity.sub == "google-subject-1"
 
 
-def test_oidc_code_flow_does_not_require_google_access_token_for_optional_at_hash(
+def test_oidc_code_flow_validates_optional_at_hash_with_ephemeral_access_token(
     google_config, monkeypatch
 ):
     private_pem, public_jwk = _key_pair("optional-at-hash-key")
     claims = _claims()
-    claims["at_hash"] = "signed-but-unused-access-token-hash"
+    access_token = "ephemeral-google-access-token"
+    claims["at_hash"] = base64.urlsafe_b64encode(
+        hashlib.sha256(access_token.encode()).digest()[:16]
+    ).decode().rstrip("=")
 
-    identity = _validate(monkeypatch, private_pem, public_jwk, claims)
+    identity = _validate(
+        monkeypatch,
+        private_pem,
+        public_jwk,
+        claims,
+        access_token=access_token,
+    )
 
     assert identity.sub == "google-subject-1"
+
+    with pytest.raises(GoogleIdentityError):
+        _validate(
+            monkeypatch,
+            private_pem,
+            public_jwk,
+            claims,
+            access_token="different-access-token",
+        )
 
 
 def test_oidc_rejects_wrong_signature(google_config, monkeypatch):
@@ -335,7 +354,13 @@ def test_invitation_binding_uses_email_once_then_stable_google_sub(db, monkeypat
     )
     db.add(invited)
     db.commit()
-    monkeypatch.setattr(google_login, "_exchange_code", lambda code, verifier: "id-token")
+    monkeypatch.setattr(
+        google_login,
+        "_exchange_code",
+        lambda code, verifier: google_login.GoogleTokenResponse(
+            id_token="id-token", access_token="access-token"
+        ),
+    )
     identities = iter(
         [
             GoogleIdentity("stable-google-sub", "invited@example.test", "First Name"),
@@ -372,7 +397,13 @@ def test_invitation_binding_uses_email_once_then_stable_google_sub(db, monkeypat
 
 def test_uninvited_google_account_does_not_create_user(db, monkeypatch):
     state, binding = _login_attempt(db, "uninvited")
-    monkeypatch.setattr(google_login, "_exchange_code", lambda code, verifier: "id-token")
+    monkeypatch.setattr(
+        google_login,
+        "_exchange_code",
+        lambda code, verifier: google_login.GoogleTokenResponse(
+            id_token="id-token", access_token="access-token"
+        ),
+    )
     monkeypatch.setattr(
         google_login,
         "validate_google_id_token",
@@ -467,7 +498,10 @@ def test_token_exchange_uses_pkce_and_does_not_log_or_return_access_token(
     with caplog.at_level(logging.DEBUG):
         result = google_login._exchange_code("one-time-code", "pkce-verifier")
 
-    assert result == "verified-id-token-placeholder"
+    assert result.id_token == "verified-id-token-placeholder"
+    assert result.access_token == "must-not-be-used-or-logged"
+    assert "verified-id-token-placeholder" not in repr(result)
+    assert "must-not-be-used-or-logged" not in repr(result)
     assert captured["code_verifier"] == "pkce-verifier"
     assert captured["grant_type"] == "authorization_code"
     assert "one-time-code" not in caplog.text

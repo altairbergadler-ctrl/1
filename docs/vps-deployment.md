@@ -44,7 +44,15 @@ bash deploy/vps/bootstrap-runtime.sh
 отдельную БД PostgreSQL backup по разделу `Backup перед migration` ниже.
 
 ```bash
-release_sha=$(git rev-parse HEAD)
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  release_sha=$(git rev-parse HEAD)
+else
+  release_sha=$(basename "$(readlink -f /opt/audiofeel/app)")
+fi
+case "$release_sha" in
+  ""|*[!0-9a-f]* ) echo "invalid release SHA" >&2; exit 1 ;;
+esac
+test "${#release_sha}" -eq 40
 sed -i "s/^RELEASE_SHA=.*/RELEASE_SHA=${release_sha}/" \
   /etc/audiofeel/music-service.env
 unset release_sha
