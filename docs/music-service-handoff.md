@@ -1,6 +1,6 @@
 # Music Service MVP: handoff для новых чатов
 
-Актуально на: 2026-08-10
+Актуально на: 2026-08-11
 Статус: MVP acceptance завершён; Release 2 не начат.
 Опорная версия: `v0.1.0` (создаётся после итогового коммита handoff).
 
@@ -19,13 +19,15 @@
 ## 2. Что реализовано
 
 - Docker Compose: PostgreSQL, Redis, FastAPI, Celery, Nginx/PWA.
-- Alembic: `0005_provider_health_credentials (head)`.
+- Alembic: `0007_manual_playlist_source (head)`.
 - Read-only монтирование реальной библиотеки через
   `MUSIC_LIBRARY_HOST_PATH`; локально используется `X:/Music`.
 - Сканер lossless-файлов с тегами, SHA-1, идемпотентностью,
   обработкой move/retag и удалением устаревших записей каталога.
 - MusicBrainz enrichment с Redis cache и rate limit.
 - Реальные Spotify OAuth/import и Yandex Music token/import.
+- Spotify OAuth-вход с возвратом в PWA, импорт одного доступного плейлиста по
+  ссылке и независимый CSV/M3U/текстовый конвертер без provider OAuth.
 - Яндекс «Мне нравится» импортируется как стабильный плейлист.
 - Каскад matching: ISRC, exact, fuzzy, manual review, MISSING.
 - Bit-perfect delivery: HTTP Range, одиночный файл, ZIP_STORED, M3U8.
@@ -56,6 +58,10 @@
 | Matching | 1 READY, 71 MISSING, 0 NEEDS_REVIEW |
 | Acceptance track | `Slayyyter — DANCE...`: exact, confidence `0.9799`, READY |
 
+Отдельная приёмка playlist-link/converter 2026-08-11: `249 passed, 5 skipped`,
+JavaScript/Python syntax clean, Alembic PostgreSQL current = heads =
+`0007_manual_playlist_source`. Подробности: `docs/playlist-import.md`.
+
 Отдельная приёмка Provider Health 2026-08-10 описана в
 `docs/provider-health-credential-rotation.md`: backend `212 passed, 5 skipped`,
 Qobuz sidecar `9 tests`, Alembic `0005`, Celery `pong`, live Yandex health и
@@ -85,6 +91,8 @@ docker compose run --rm `
 1. Spotify Development Mode не отдаёт 18 чужих/недоступных
    плейлистов (`403`). Доступные owned/collaborative плейлисты
    импортируются; job завершается с `result_status=partial`.
+   Для независимого от Spotify импорта доступен CSV/M3U/текстовый конвертер;
+   он не умеет получать треки непосредственно из одной публичной ссылки.
 2. В реальных данных не возник естественный `NEEDS_REVIEW`; ручной
    review/resolve покрыт API и Docker-тестами.
 3. Tailscale и его Serve-конфигурация установлены на Windows-хосте,

@@ -42,7 +42,7 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v9";' in service_worker
+    assert 'const CACHE_NAME = "lossless-archive-v12";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
 
@@ -61,6 +61,32 @@ def test_google_drive_guide_maps_current_google_console_fields():
     assert "Add client secret" in app_script
     assert "Маска вида •••• или **** не подходит" in app_script
     assert "Сейчас ничего вводить не нужно" in app_script
+
+
+def test_playlist_page_connects_spotify_before_importing_one_url():
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    app_script = (root / "app.js").read_text(encoding="utf-8")
+    styles = (root / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="playlist-url-form"' in app_script
+    assert "https://open.spotify.com/playlist/..." in app_script
+    assert 'api("/api/playlists/import-url"' in app_script
+    assert 'api("/api/sources")' in app_script
+    assert 'data-action="spotify-connect"' in app_script
+    assert 'window.location.assign("/api/sources/spotify/connect")' in app_script
+    assert "Client ID, Client Secret и пароль вводить в Audiofeel не нужно" in app_script
+    assert ".playlist-import-card" in styles
+
+
+def test_playlist_page_imports_csv_m3u_or_text_without_provider_auth():
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    app_script = (root / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="playlist-converter-form"' in app_script
+    assert ".csv,.m3u,.m3u8,.txt" in app_script
+    assert 'api("/api/playlists/import-content"' in app_script
+    assert "imported.matching_job.id" in app_script
+    assert "Исполнитель — Название трека" in app_script
 
 
 @pytest.mark.skipif(

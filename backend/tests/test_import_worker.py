@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -57,6 +58,85 @@ def test_spotify_import_task_completes_job(session_factory, monkeypatch):
     assert json.loads(job.payload)["service"] == "spotify"
     assert json.loads(job.payload)["import"]["tracks_imported"] == 2
     assert result["result_status"] == "completed"
+    check.close()
+
+
+def test_public_spotify_url_task_imports_then_matches_one_playlist(
+    session_factory, monkeypatch
+):
+    job_id, source_id = _create_job_and_source(session_factory, ServiceEnum.spotify)
+    setup = session_factory()
+    job = setup.get(Job, job_id)
+    url = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+    job.payload = json.dumps({"source_id": source_id, "url": url})
+    playlist = Playlist(
+        source_id=source_id,
+        external_id="37i9dQZF1DXcBWIGoYBM5M",
+        name="Public playlist",
+        snapshot_hash="snapshot-public",
+    )
+    setup.add(playlist)
+    setup.commit()
+    playlist_id = playlist.id
+    setup.close()
+    calls = []
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+
+    def import_public_playlist(db, selected_url):
+        calls.append(("import", selected_url))
+        return (
+            SpotifyImportSummary(discovered=1, created=1),
+            db.get(Playlist, playlist_id),
+        )
+
+    monkeypatch.setattr(
+        "app.workers.tasks.import_spotify_playlist_url",
+        import_public_playlist,
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks.run_matching",
+        lambda _db, *, playlist_id: calls.append(("matching", playlist_id))
+        or SimpleNamespace(to_dict=lambda: {"processed": 1}),
+    )
+
+    result = import_playlists_task.run(job_id, source_id, None, url)
+
+    assert calls == [("import", url), ("matching", playlist_id)]
+    assert result["playlist_id"] == playlist_id
+    assert result["matching"] == {"processed": 1}
+    check = session_factory()
+    assert check.get(Job, job_id).status == JobStatus.done
+    check.close()
+
+
+def test_public_spotify_url_task_rejects_a_missing_task_url(
+    session_factory, monkeypatch
+):
+    job_id, source_id = _create_job_and_source(session_factory, ServiceEnum.spotify)
+    setup = session_factory()
+    job = setup.get(Job, job_id)
+    job.payload = json.dumps(
+        {
+            "source_id": source_id,
+            "url": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+        }
+    )
+    setup.commit()
+    setup.close()
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+    imported = []
+    monkeypatch.setattr(
+        "app.workers.tasks.import_spotify_playlists",
+        lambda *_args, **_kwargs: imported.append(True),
+    )
+
+    with pytest.raises(ValueError, match="URL does not match"):
+        import_playlists_task.run(job_id, source_id)
+
+    assert imported == []
+    check = session_factory()
+    assert check.get(Job, job_id).status == JobStatus.pending
+    assert "ValueError" in check.get(Job, job_id).error
     check.close()
 
 

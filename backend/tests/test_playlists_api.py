@@ -17,6 +17,7 @@ from app.models import (
     ServiceEnum,
     utcnow,
 )
+from app.services.spotify import SpotifyToken, save_spotify_token
 
 
 def _seed_playlist(db):
@@ -286,6 +287,73 @@ def test_database_rejects_two_active_import_jobs_for_one_source(db):
     with pytest.raises(IntegrityError):
         db.commit()
     db.rollback()
+
+
+def test_public_spotify_url_queues_one_canonical_import(
+    api_client, auth_headers, db, monkeypatch
+):
+    playlist_id = "37i9dQZF1DXcBWIGoYBM5M"
+    source = save_spotify_token(
+        db,
+        SpotifyToken(
+            access_token="user-access",
+            refresh_token="user-refresh",
+            expires_at=utcnow() + timedelta(hours=1),
+        ),
+    )
+    queued = []
+    monkeypatch.setattr(
+        "app.api.playlists.import_playlists_task.delay",
+        lambda *args: queued.append(args),
+    )
+
+    response = api_client.post(
+        "/api/playlists/import-url",
+        json={
+            "url": f"https://open.spotify.com/intl-de/playlist/{playlist_id}?si=share"
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 202
+    job = db.get(Job, response.json()["id"])
+    queued_source = db.get(PlaylistSource, job.source_id)
+    payload = json.loads(job.payload)
+    assert queued_source.id == source.id
+    assert queued_source.service == ServiceEnum.spotify
+    assert payload["url"] == f"https://open.spotify.com/playlist/{playlist_id}"
+    assert queued == [(job.id, source.id, None, payload["url"])]
+
+
+def test_public_spotify_url_rejects_non_playlist_without_creating_job(
+    api_client, auth_headers, db
+):
+    response = api_client.post(
+        "/api/playlists/import-url",
+        json={"url": "https://example.com/playlist/37i9dQZF1DXcBWIGoYBM5M"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+    assert db.scalar(select(Job)) is None
+    assert db.scalar(select(PlaylistSource)) is None
+
+
+def test_spotify_url_import_requires_a_connected_account(
+    api_client, auth_headers, db
+):
+    response = api_client.post(
+        "/api/playlists/import-url",
+        json={
+            "url": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Connect Spotify before importing a playlist"
+    assert db.scalar(select(Job)) is None
+    assert db.scalar(select(PlaylistSource)) is None
 
 
 def test_playlist_endpoints_validate_auth_and_ids(api_client, auth_headers, db):

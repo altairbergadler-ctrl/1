@@ -32,6 +32,7 @@ def utcnow() -> datetime:
 class ServiceEnum(str, enum.Enum):
     spotify = "spotify"
     yandex = "yandex"
+    manual = "manual"
 
 
 class MatchStatus(str, enum.Enum):

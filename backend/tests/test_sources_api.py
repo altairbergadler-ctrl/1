@@ -69,19 +69,18 @@ def test_spotify_callback_upserts_one_source_without_exposing_tokens(
     first = api_client.get(
         "/api/sources/spotify/callback",
         params={"code": "first-code", "state": "first-state"},
+        follow_redirects=False,
     )
     second = api_client.get(
         "/api/sources/spotify/callback",
         params={"code": "second-code", "state": "second-state"},
+        follow_redirects=False,
     )
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["service"] == "spotify"
-    assert first.json()["connected"] is True
-    assert "access_token" not in first.json()
-    assert "refresh_token" not in first.json()
-    assert first.json()["id"] == second.json()["id"]
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert first.headers["location"] == "/#/playlists"
+    assert second.headers["location"] == "/#/playlists"
     assert (
         db.scalar(
             select(func.count(PlaylistSource.id)).where(

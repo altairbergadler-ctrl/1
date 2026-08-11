@@ -29,7 +29,11 @@ from app.services.qobuz import (
     record_qobuz_download_attempts,
 )
 from app.services.scanner import ScanAlreadyRunning, scan_library
-from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
+from app.services.spotify import (
+    import_spotify_playlist_url,
+    import_spotify_playlists,
+    refresh_spotify_playlist,
+)
 from app.services.storage import (
     cleanup_expired_storage_cache,
     health_check_account,
@@ -463,6 +467,7 @@ def import_playlists_task(
     job_id: int,
     source_id: int,
     playlist_id: int | None = None,
+    url: str | None = None,
 ):
     db = SessionLocal()
     task_id = str(self.request.id or f"direct-import-{job_id}")[:64]
@@ -499,6 +504,13 @@ def import_playlists_task(
         db.commit()
         db.expire_all()
 
+        try:
+            requested_payload = json.loads(job.payload or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Playlist import job payload is invalid") from exc
+        if not isinstance(requested_payload, dict) or requested_payload.get("url") != url:
+            raise ValueError("Playlist import job URL does not match its payload")
+
         source_lock = _acquire_import_source_lock(db, source_id)
         # A replacement API request may revoke this job while it waits for an
         # older worker's source lock. Revalidate before any provider writes.
@@ -513,12 +525,18 @@ def import_playlists_task(
             if playlist is None or playlist.source_id != source.id:
                 raise ValueError("Playlist does not belong to the import source")
 
+        matching_summary = None
         if source.service == ServiceEnum.spotify:
-            summary = (
-                refresh_spotify_playlist(db, playlist)
-                if playlist is not None
-                else import_spotify_playlists(db, source)
-            )
+            if url is not None:
+                summary, playlist = import_spotify_playlist_url(db, url)
+                playlist_id = playlist.id
+                matching_summary = run_matching(db, playlist_id=playlist_id)
+            else:
+                summary = (
+                    refresh_spotify_playlist(db, playlist)
+                    if playlist is not None
+                    else import_spotify_playlists(db, source)
+                )
         elif source.service == ServiceEnum.yandex:
             summary = (
                 refresh_yandex_playlist(db, playlist)
@@ -543,9 +561,15 @@ def import_playlists_task(
                 "phase": "completed",
                 "source_id": source.id,
                 "playlist_id": playlist_id,
+                "url": url,
                 "service": source.service.value,
                 "result_status": result_status,
                 "import": summary_data,
+                "matching": (
+                    matching_summary.to_dict()
+                    if matching_summary is not None
+                    else None
+                ),
             },
             ensure_ascii=False,
             separators=(",", ":"),

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
@@ -97,6 +98,24 @@ class SourceListOut(BaseModel):
 
 class PlaylistImportIn(BaseModel):
     source_id: int = Field(gt=0)
+
+
+class PlaylistUrlImportIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class PlaylistContentImportIn(BaseModel):
+    name: str = Field(min_length=1, max_length=512)
+    content: str = Field(min_length=1, max_length=2_000_000)
+    format: Literal["auto", "csv", "m3u", "text"] = "auto"
+
+
+class PlaylistContentImportOut(BaseModel):
+    playlist_id: int
+    imported: int
+    skipped: int
+    format: str
+    matching_job: JobOut
 
 
 class PlaylistStatusSummaryOut(BaseModel):

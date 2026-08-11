@@ -19,10 +19,12 @@ from app.services.spotify import (
     create_spotify_authorization,
     create_spotify_oauth,
     exchange_spotify_code,
+    import_spotify_playlist_url,
     import_spotify_playlists,
     refresh_spotify_playlist,
     refresh_spotify_token,
     save_spotify_token,
+    spotify_playlist_id_from_url,
 )
 from app.services.credentials import get_credential_payload
 
@@ -129,6 +131,14 @@ class FakeSpotify:
         }
         return pages[offset]
 
+    def playlist(self, playlist_id, *, fields=None):
+        return {
+            "id": playlist_id,
+            "name": "Public playlist",
+            "snapshot_id": self.snapshots.get(playlist_id, "public-snapshot"),
+            "type": "playlist",
+        }
+
     def playlist_items(
         self,
         playlist_id,
@@ -200,6 +210,64 @@ def _source(db) -> PlaylistSource:
 
 def _simple_normalize(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def test_public_playlist_url_validation_is_strict_and_canonical():
+    playlist_id = "37i9dQZF1DXcBWIGoYBM5M"
+
+    assert (
+        spotify_playlist_id_from_url(
+            f"https://open.spotify.com/intl-de/playlist/{playlist_id}?si=public"
+        )
+        == playlist_id
+    )
+    for invalid in (
+        f"http://open.spotify.com/playlist/{playlist_id}",
+        f"https://example.com/playlist/{playlist_id}",
+        f"https://open.spotify.com/track/{playlist_id}",
+        "https://open.spotify.com/playlist/not-an-id",
+    ):
+        with pytest.raises(SpotifyConfigurationError):
+            spotify_playlist_id_from_url(invalid)
+
+
+def test_playlist_url_import_uses_connected_spotify_source(db):
+    playlist_id = "37i9dQZF1DXcBWIGoYBM5M"
+    spotify = FakeSpotify()
+    source = save_spotify_token(
+        db,
+        SpotifyToken(
+            access_token="user-access",
+            refresh_token="user-refresh",
+            expires_at=utcnow() + timedelta(hours=1),
+        ),
+    )
+
+    summary, playlist = import_spotify_playlist_url(
+        db,
+        f"https://open.spotify.com/playlist/{playlist_id}?si=ignored",
+        spotify,
+        normalizer=_simple_normalize,
+    )
+
+    items = list(
+        db.scalars(
+            select(PlaylistItem)
+            .where(PlaylistItem.playlist_id == playlist.id)
+            .order_by(PlaylistItem.position)
+        )
+    )
+    assert summary.discovered == 1
+    assert summary.created == 1
+    assert summary.tracks_imported == 1
+    assert playlist.external_id == playlist_id
+    assert source.access_token is None
+    assert source.refresh_token is None
+    assert get_credential_payload(db, "spotify") == {
+        "access_token": "user-access",
+        "refresh_token": "user-refresh",
+    }
+    assert [(item.position, item.title_raw) for item in items] == [(0, "Quiet Song")]
 
 
 def test_oauth_state_is_random_one_time_and_checked_before_code_exchange():

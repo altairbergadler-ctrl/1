@@ -30,7 +30,11 @@ def _source_out(db: Session, source: PlaylistSource) -> dict:
     return {
         "id": source.id,
         "service": source.service.value,
-        "connected": has_credential(db, source.service.value),
+        "connected": (
+            True
+            if source.service == ServiceEnum.manual
+            else has_credential(db, source.service.value)
+        ),
         "expires_at": source.expires_at,
     }
 
@@ -69,7 +73,7 @@ def connect_spotify():
     return RedirectResponse(authorization.url, status_code=status.HTTP_302_FOUND)
 
 
-@router.get("/spotify/callback", response_model=SourceOut)
+@router.get("/spotify/callback", response_class=RedirectResponse)
 def spotify_callback(
     code: str | None = Query(default=None),
     state_value: str | None = Query(default=None, alias="state"),
@@ -117,7 +121,7 @@ def spotify_callback(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Spotify OAuth is not configured",
         ) from exc
-    return _source_out(db, source)
+    return RedirectResponse(url="/#/playlists", status_code=status.HTTP_302_FOUND)
 
 
 @router.post(

@@ -1,6 +1,7 @@
 # Music Service — MVP (Этап 4: матчинг, выдача и PWA)
 
-Hi-Res музыкальный архив: импорт плейлистов Spotify/Яндекс.Музыки,
+Hi-Res музыкальный архив: импорт плейлистов Spotify/Яндекс.Музыки и
+CSV/M3U/текстовых списков,
 матчинг с локальной lossless-библиотекой, bit-perfect выдача на смартфон.
 
 ТЗ: `docs/music-service-logic.md`, `docs/music-service-mvp-plan.md`.
@@ -58,6 +59,9 @@ Yandex fallback-контейнеры `.m4a`, `.aac`, `.mp3`; читает тег
 - `POST /api/providers/{provider}/health-check` — ручная фоновая проверка;
 - `GET /api/sources` — подключённые источники без выдачи токенов;
 - `POST /api/playlists/import` — фоновый импорт по `source_id`;
+- `POST /api/playlists/import-url` — один Spotify-плейлист по ссылке через
+  уже подключённый пользовательский OAuth;
+- `POST /api/playlists/import-content` — CSV/M3U/текст без provider OAuth;
 - `GET /api/playlists` — список и сводка READY/MISSING/REVIEW/UNMATCHED;
 - `GET /api/playlists/{id}` и `/items?status=` — детали и треки;
 - `POST /api/playlists/{id}/refresh` — инкрементальное обновление.
@@ -79,6 +83,12 @@ Spotify пропускает неизменившиеся плейлисты п�
 Для одного источника одновременно выполняется только один импорт. Совпадающий
 запрос возвращает уже активную задачу, а несовместимый refresh/full-import —
 `409` с ID задачи, завершения которой нужно дождаться.
+
+Независимый конвертер принимает CSV, M3U/M3U8 или строки
+`Исполнитель — Трек`, создаёт источник `manual` и сразу ставит новый плейлист
+в очередь matching. Один запрос ограничен 2 МБ и 5000 треками. Он не читает
+Spotify-ссылку без OAuth и не загружает аудио. Форматы, API и границы
+безопасности описаны в [`docs/playlist-import.md`](docs/playlist-import.md).
 
 После обновления с этапа 2 один раз повторно запустите `/api/library/scan`:
 скан идемпотентно переведёт существующий каталог на те же norm-ключи, которые
@@ -291,6 +301,7 @@ Sidecar отдельно проверяет allowlist,
 - `backend/app/services/scanner.py` — локальный lossless-каталог
 - `backend/app/services/musicbrainz.py` — внешнее обогащение и Redis-кэш
 - `backend/app/services/spotify.py` — OAuth, refresh токенов и импорт Spotify
+- `backend/app/services/playlist_converter.py` — CSV/M3U/текстовый импорт
 - `backend/app/services/yandex.py` — импорт Яндекс.Музыки
 - `backend/app/services/yandex_acquisition.py` — Yandex provider: signed
   file-info, FLAC preference, AAC/MP3 fallback, staging и batching
@@ -309,6 +320,7 @@ Sidecar отдельно проверяет allowlist,
 - `data/music/` — музыкальная библиотека (mount `/music/library`)
 - `data/qobuz-staging/` — staging Qobuz-загрузок (mount `/music/staging`)
 - `docs/music-service-handoff.md` — проверенное состояние MVP и следующие итерации
+- `docs/playlist-import.md` — OAuth-ссылки и независимый конвертер плейлистов
 - `docs/qobuz-dl-assessment.md` — security/terms/code audit интеграции Qobuz
 - `docs/yandex-music-api-assessment.md` — audit и ограничения lossless flow
 - `docs/yandex-acquisition-acceptance.md` — Docker/live-приёмка Яндекса

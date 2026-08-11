@@ -130,7 +130,7 @@ tracks(id, album_id, title, title_normalized, track_no, disc_no,
 files(id, track_id, path_on_nas, format, bit_depth, sample_rate,
       bitrate, size_bytes, sha1, spectrum_verified bool)
 releases(id, tracker, topic_url, magnet, status, quality_score)
-playlist_sources(id, service[spotify|yandex])
+playlist_sources(id, service[spotify|yandex|manual])
 provider_credentials(id, provider, ciphertext, nonce, key_id, version,
                      validated_at, updated_at)
 provider_health(id, provider, component[account|provider_api|sidecar|worker],
@@ -144,7 +144,7 @@ jobs(id, type, payload, status, retries)
 
 ---
 
-## 6. Модуль 4: Playlist Importer (Spotify / Яндекс.Музыка)
+## 6. Модуль 4: Playlist Importer (Spotify / Яндекс.Музыка / файлы)
 
 ### 6.1 Spotify
 - OAuth 2.0 (Authorization Code Flow), scopes: `playlist-read-private`, `playlist-read-collaborative`, `user-library-read`.
@@ -156,7 +156,14 @@ jobs(id, type, payload, status, retries)
 - Неофициальный API (`yandex-music-api` / `yandex_music` Python lib): список плейлистов, треки с artists/title/albums, `trackId`.
 - Особенность: ISRC часто отсутствует → матчинг по artist+title+album+duration.
 
-### 6.3 Нормализация на входе
+### 6.3 Независимый импорт файла или текста
+- CSV с обязательными artist/title и необязательными album/ISRC/duration/URI.
+- Extended M3U/M3U8 с `#EXTINF`.
+- Текст `Исполнитель — Трек` или tab-separated artist/title/album.
+- Источник `manual`, сохранение порядка и дубликатов, немедленная matching-job.
+- Не требует provider OAuth и не извлекает содержимое Spotify-ссылки.
+
+### 6.4 Нормализация на входе
 Единая структура `playlist_items` независимо от источника; сырые строки сохраняются для аудита; строятся нормализованные ключи.
 
 ---
@@ -199,7 +206,7 @@ jobs(id, type, payload, status, retries)
 ## 9. Сквозной сценарий (end-to-end flow)
 
 ```
-1. Пользователь подключает Spotify/Яндекс → Importer вытягивает плейлисты.
+1. Пользователь подключает Spotify/Яндекс либо импортирует CSV/M3U/текст.
 2. Matching Engine сопоставляет треки с каталогом:
      - найдено → статус READY
      - не найдено → wantlist для Scraper

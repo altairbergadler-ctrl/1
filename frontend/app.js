@@ -647,16 +647,148 @@ async function migrateLocalStorage(button) {
   }
 }
 
+function playlistConverterCard() {
+  return `
+    <section class="card playlist-import-card playlist-converter-card">
+      <div>
+        <p class="eyebrow">БЕЗ АВТОРИЗАЦИИ</p>
+        <h2>Импортировать список треков</h2>
+        <p class="lede">Выберите CSV, M3U/M3U8 или TXT — либо вставьте строки вида «Исполнитель — Трек». Формат определится автоматически, а импорт сразу отправится на сопоставление.</p>
+      </div>
+      <form id="playlist-converter-form">
+        <label for="playlist-converter-name">Название плейлиста</label>
+        <input id="playlist-converter-name" name="name" type="text" required maxlength="512" placeholder="Мой плейлист">
+        <label for="playlist-converter-file">Файл плейлиста</label>
+        <input id="playlist-converter-file" name="file" type="file" accept=".csv,.m3u,.m3u8,.txt,text/csv,text/plain,audio/x-mpegurl">
+        <label for="playlist-converter-content">Или вставьте список</label>
+        <textarea id="playlist-converter-content" name="content" required maxlength="2000000" rows="7" placeholder="Исполнитель — Название трека"></textarea>
+        <div class="action-row">
+          <button type="submit">Импортировать и сопоставить</button>
+          <small>До 2 МБ и 5000 треков. Файл никуда, кроме Audiofeel, не отправляется.</small>
+        </div>
+        <p class="form-error" role="alert"></p>
+      </form>
+    </section>
+  `;
+}
+
+
+async function loadPlaylistFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const form = input.closest("form");
+  const error = form.querySelector(".form-error");
+  if (file.size > 2_000_000) {
+    input.value = "";
+    error.textContent = "Файл больше 2 МБ";
+    return;
+  }
+  error.textContent = "";
+  form.elements.content.value = await file.text();
+  if (!form.elements.name.value.trim()) {
+    form.elements.name.value = file.name.replace(/\.(csv|m3u8?|txt)$/i, "");
+  }
+}
+
+
+async function importPlaylistContent(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const values = new FormData(form);
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    const imported = await api("/api/playlists/import-content", {
+      method: "POST",
+      body: JSON.stringify({
+        name: String(values.get("name") || "").trim(),
+        content: String(values.get("content") || ""),
+        format: "auto",
+      }),
+    });
+    showToast(`Импортировано ${imported.imported} треков. Запущено сопоставление…`, 10_000);
+    await waitForJob(imported.matching_job.id, "Не удалось сопоставить импортированный плейлист");
+    showToast(`Плейлист готов${imported.skipped ? ` · пропущено строк: ${imported.skipped}` : ""}`);
+    window.location.hash = `#/playlist/${imported.playlist_id}`;
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+
+function playlistUrlImportCard(spotifyConnected) {
+  return `
+    <section class="card playlist-import-card">
+      <div>
+        <p class="eyebrow">НОВЫЙ ПЛЕЙЛИСТ</p>
+        <h2>${spotifyConnected ? "Вставьте ссылку Spotify" : "Подключите Spotify"}</h2>
+        <p class="lede">${spotifyConnected
+          ? "Сервис прочитает выбранный плейлист через подключённый аккаунт, сохранит порядок треков и сразу запустит сопоставление с архивом."
+          : "Один раз войдите через обычное окно Spotify. Client ID, Client Secret и пароль вводить в Audiofeel не нужно. После подтверждения вы вернётесь к плейлистам."}</p>
+      </div>
+      ${spotifyConnected ? `
+        <form id="playlist-url-form">
+          <label for="playlist-url">Ссылка на плейлист</label>
+          <div class="playlist-url-row">
+            <input id="playlist-url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="https://open.spotify.com/playlist/..." required maxlength="2048">
+            <button type="submit">Добавить</button>
+          </div>
+          <p class="form-error" role="alert"></p>
+        </form>
+      ` : '<button type="button" data-action="spotify-connect">Войти через Spotify</button>'}
+    </section>
+  `;
+}
+
+
+async function importPlaylistUrl(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const url = String(new FormData(form).get("url") || "").trim();
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    const job = await api("/api/playlists/import-url", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    showToast("Плейлист импортируется и сопоставляется с архивом…", 10_000);
+    const finished = await waitForJob(job.id, "Не удалось импортировать плейлист");
+    const playlistId = Number(finished.payload?.playlist_id || 0);
+    showToast("Плейлист добавлен");
+    if (playlistId > 0) {
+      window.location.hash = `#/playlist/${playlistId}`;
+    } else {
+      await renderPlaylists();
+    }
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+
+function connectSpotify(button) {
+  button.disabled = true;
+  window.location.assign("/api/sources/spotify/connect");
+}
+
+
 async function renderPlaylists() {
   loadingPage("Плейлисты в вашем архиве");
   try {
-    const [data, qobuzStatus, yandexStatus] = await Promise.all([
+    const [data, sources, qobuzStatus, yandexStatus] = await Promise.all([
       api("/api/playlists?limit=200"),
+      api("/api/sources"),
       // Статус Qobuz подтягиваем мягко: если роутер недоступен, карточка
       // просто покажет «статус недоступен», а список плейлистов не пострадает.
       api("/api/qobuz/status").catch(() => null),
       api("/api/yandex-download/status").catch(() => null),
     ]);
+    const spotifyConnected = sources.items.some(
+      (source) => source.service === "spotify" && source.connected,
+    );
     app.innerHTML = shell(`
       <main>
         <section class="page-header">
@@ -670,12 +802,14 @@ async function renderPlaylists() {
             <a class="button secondary" href="#/review">Открыть review</a>
           </div>
         </section>
+        ${playlistConverterCard()}
+        ${playlistUrlImportCard(spotifyConnected)}
         ${qobuzSourceCard(qobuzStatus)}
         ${yandexStatus?.enabled ? yandexSourceCard(yandexStatus) : ""}
         ${data.items.length ? `<section class="playlist-grid">${data.items.map(playlistCard).join("")}</section>` : `
           <section class="empty-state">
             <h2>Плейлистов пока нет</h2>
-            <p>Подключите Spotify или Яндекс.Музыку через API и запустите импорт — здесь появится прогресс коллекции.</p>
+            <p>${spotifyConnected ? "Вставьте выше ссылку Spotify — здесь появится импортированный плейлист и прогресс сопоставления." : "Подключите Spotify, затем добавьте нужный плейлист по ссылке."}</p>
           </section>
         `}
       </main>
@@ -1238,6 +1372,14 @@ app.addEventListener("submit", (event) => {
     event.preventDefault();
     rotateProvider(event.target);
   }
+  if (event.target.id === "playlist-url-form") {
+    event.preventDefault();
+    importPlaylistUrl(event.target);
+  }
+  if (event.target.id === "playlist-converter-form") {
+    event.preventDefault();
+    importPlaylistContent(event.target);
+  }
   if (event.target.id === "google-oauth-form") {
     event.preventDefault();
     configureGoogleOAuth(event.target);
@@ -1245,6 +1387,14 @@ app.addEventListener("submit", (event) => {
   if (event.target.matches(".storage-account-form")) {
     event.preventDefault();
     updateStorageAccount(event.target);
+  }
+});
+
+app.addEventListener("change", (event) => {
+  if (event.target.id === "playlist-converter-file") {
+    loadPlaylistFile(event.target).catch((exception) => {
+      event.target.closest("form").querySelector(".form-error").textContent = exception.message;
+    });
   }
 });
 
@@ -1257,6 +1407,7 @@ app.addEventListener("click", (event) => {
   if (action === "qobuz-fetch") qobuzFetchMissing(button);
   if (action === "yandex-fetch") yandexFetchMissing(button);
   if (action === "provider-health") runProviderHealth(button);
+  if (action === "spotify-connect") connectSpotify(button);
   if (action === "storage-connect") connectGoogle(button);
   if (action === "storage-health") runStorageHealth(button);
   if (action === "storage-migrate") migrateLocalStorage(button);

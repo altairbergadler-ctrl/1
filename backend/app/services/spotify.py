@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import spotipy
 from redis import Redis
@@ -39,6 +40,7 @@ SPOTIFY_SCOPES = (
 )
 SPOTIFY_PLAYLIST_ITEMS_PAGE_SIZE = 50
 _ISRC_RE = re.compile(r"^[A-Z0-9]{12}$")
+_SPOTIFY_PLAYLIST_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
 
 
 class SpotifyServiceError(RuntimeError):
@@ -92,6 +94,13 @@ class SpotifyOAuthBackend(Protocol):
 
 
 class SpotifyApiClient(Protocol):
+    def playlist(
+        self,
+        playlist_id: str,
+        *,
+        fields: str | None = None,
+    ) -> Mapping[str, Any]: ...
+
     def current_user_playlists(
         self, *, limit: int, offset: int
     ) -> Mapping[str, Any]: ...
@@ -380,6 +389,45 @@ def save_spotify_token(
     return source
 
 
+def spotify_playlist_id_from_url(url: str) -> str:
+    """Validate a public open.spotify.com URL and return its playlist id.
+
+    The upstream URL is reconstructed from this identifier by Spotipy, so a
+    submitted URL can never turn the backend into an arbitrary URL fetcher.
+    """
+
+    candidate = str(url or "").strip()
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError as exc:
+        raise SpotifyConfigurationError("Spotify playlist URL is invalid") from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or (parsed.hostname or "").casefold() != "open.spotify.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        raise SpotifyConfigurationError(
+            "Use an https://open.spotify.com/playlist/... URL"
+        )
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if parts and parts[0].casefold().startswith("intl-"):
+        parts = parts[1:]
+    if len(parts) != 2 or parts[0].casefold() != "playlist":
+        raise SpotifyConfigurationError("Spotify URL must point to a playlist")
+    playlist_id = parts[1]
+    if not _SPOTIFY_PLAYLIST_ID_RE.fullmatch(playlist_id):
+        raise SpotifyConfigurationError("Spotify playlist id is invalid")
+    return playlist_id
+
+
+def canonical_spotify_playlist_url(url: str) -> str:
+    return f"https://open.spotify.com/playlist/{spotify_playlist_id_from_url(url)}"
+
+
 def _spotify_client_for_source(
     db: Session,
     source: PlaylistSource,
@@ -656,6 +704,66 @@ def import_spotify_playlists(
         db.rollback()
         raise
     return summary
+
+
+def import_spotify_playlist_url(
+    db: Session,
+    url: str,
+    client: SpotifyApiClient | None = None,
+    *,
+    normalizer: Callable[[str], str] | None = None,
+) -> tuple[SpotifyImportSummary, Playlist]:
+    """Import exactly one playlist through the connected Spotify account."""
+
+    playlist_id = spotify_playlist_id_from_url(url)
+    source = db.scalar(
+        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
+    )
+    if source is None:
+        raise SpotifyTokenError("Connect Spotify before importing a playlist")
+    api = client or _spotify_client_for_source(db, source)
+    try:
+        raw = api.playlist(
+            playlist_id,
+            fields="id,name,snapshot_id,type",
+        )
+    except Exception as exc:
+        raise SpotifyProviderError(
+            "Spotify could not read this public playlist"
+        ) from exc
+    if not isinstance(raw, Mapping) or raw.get("type") not in (None, "playlist"):
+        raise SpotifyImportError("Spotify returned an invalid playlist response")
+    external_id = str(raw.get("id") or "").strip()
+    snapshot_hash = str(raw.get("snapshot_id") or "").strip()
+    if external_id != playlist_id or not snapshot_hash:
+        raise SpotifyImportError("Spotify playlist metadata is incomplete")
+    remote = SpotifyPlaylistRecord(
+        external_id=external_id,
+        name=str(raw.get("name") or "Untitled playlist").strip()
+        or "Untitled playlist",
+        snapshot_hash=snapshot_hash,
+    )
+
+    summary = SpotifyImportSummary(discovered=1)
+    try:
+        playlist = _upsert_playlist(
+            db,
+            source,
+            remote,
+            api,
+            summary,
+            normalizer=normalizer or _normalizer(),
+        )
+        db.commit()
+        db.refresh(playlist)
+    except Exception as exc:
+        db.rollback()
+        if isinstance(exc, (SQLAlchemyError, SpotifyServiceError)):
+            raise
+        raise SpotifyProviderError(
+            "Spotify could not return the public playlist tracks"
+        ) from exc
+    return summary, playlist
 
 
 def refresh_spotify_playlist(
