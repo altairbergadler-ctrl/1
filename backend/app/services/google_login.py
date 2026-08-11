@@ -319,7 +319,7 @@ def _exchange_code(code: str, verifier: str) -> str:
         raise GoogleLoginUnavailable("Google token exchange is unavailable") from exc
     token = payload.get("id_token") if isinstance(payload, dict) else None
     if not isinstance(token, str) or not token or len(token) > 32_768:
-        raise GoogleIdentityError("Google identity token is invalid")
+        raise GoogleIdentityError("Google token response has no identity token")
     return token
 
 
@@ -332,7 +332,7 @@ def validate_google_id_token(
     try:
         header = jwt.get_unverified_header(token)
     except JWTError as exc:
-        raise GoogleIdentityError("Google identity token is invalid") from exc
+        raise GoogleIdentityError("Google identity token header is invalid") from exc
     kid = header.get("kid") if isinstance(header, dict) else None
     algorithm = header.get("alg") if isinstance(header, dict) else None
     if algorithm != "RS256" or not isinstance(kid, str) or not kid:
@@ -360,7 +360,18 @@ def validate_google_id_token(
             },
         )
     except JWTError as exc:
-        raise GoogleIdentityError("Google identity token is invalid") from exc
+        reason = str(exc).casefold()
+        if "issuer" in reason:
+            message = "Google identity issuer is invalid"
+        elif "audience" in reason:
+            message = "Google identity audience is invalid"
+        elif "expired" in reason or "expiration" in reason:
+            message = "Google identity token is expired"
+        elif "signature" in reason:
+            message = "Google identity signature is invalid"
+        else:
+            message = "Google identity claims are invalid"
+        raise GoogleIdentityError(message) from exc
     audience = claims.get("aud")
     if isinstance(audience, str):
         audience_ok = audience == client_id
