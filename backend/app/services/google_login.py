@@ -356,6 +356,10 @@ def validate_google_id_token(
                 "require_iat": True,
                 "require_iss": True,
                 "require_sub": True,
+                # Authorization Code Flow does not retain or use Google's
+                # access token.  python-jose otherwise requires that token
+                # solely to validate Google's optional at_hash claim.
+                "verify_at_hash": False,
                 "leeway": settings.google_login_clock_skew_seconds,
             },
         )

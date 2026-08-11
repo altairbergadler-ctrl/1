@@ -147,6 +147,18 @@ def test_oidc_accepts_multiple_audiences_only_with_matching_azp(
     assert identity.sub == "google-subject-1"
 
 
+def test_oidc_code_flow_does_not_require_google_access_token_for_optional_at_hash(
+    google_config, monkeypatch
+):
+    private_pem, public_jwk = _key_pair("optional-at-hash-key")
+    claims = _claims()
+    claims["at_hash"] = "signed-but-unused-access-token-hash"
+
+    identity = _validate(monkeypatch, private_pem, public_jwk, claims)
+
+    assert identity.sub == "google-subject-1"
+
+
 def test_oidc_rejects_wrong_signature(google_config, monkeypatch):
     trusted_private, trusted_public = _key_pair("trusted-key")
     attacker_private, _ = _key_pair("attacker-key")
