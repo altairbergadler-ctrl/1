@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Album, File as LibraryFile, MatchStatus, Playlist, PlaylistItem, Track
 from app.services.google_drive import DriveDownload, GoogleDriveError
-from app.services.storage import client_for_account
+from app.services.storage import cleanup_expired_storage_cache, client_for_account
 
 _INVALID_FILENAME = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
 _REPEATED_WHITESPACE = re.compile(r"\s+")
@@ -309,6 +309,7 @@ def materialize_remote_entries(
     if required_bytes > settings.storage_cache_max_bytes:
         raise DeliveryFileUnavailable("Download exceeds the temporary cache limit")
 
+    cleanup_expired_storage_cache()
     cache_root = Path(settings.storage_cache_path).expanduser()
     try:
         cache_root.mkdir(parents=True, exist_ok=True)

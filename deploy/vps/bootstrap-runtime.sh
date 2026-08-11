@@ -57,6 +57,8 @@ if [[ ! -e "${ENV_FILE}" ]]; then
     printf 'QOBUZ_STAGING_HOST_PATH=%s\n' "${STAGING_ROOT}"
     printf 'STORAGE_CACHE_HOST_PATH=%s\n' "${CACHE_ROOT}"
     printf 'STORAGE_CACHE_PATH=/music/cache\n'
+    printf 'STORAGE_CACHE_TTL_SECONDS=86400\n'
+    printf 'STORAGE_RECONCILE_INTERVAL_SECONDS=900\n'
     printf 'STORAGE_PRIMARY_BACKEND=google_drive\n'
     printf 'GOOGLE_DRIVE_REDIRECT_URI=https://audiofeel.su/api/storage/google/callback\n'
     printf 'PROVIDER_CREDENTIAL_KEY_HOST_FILE=%s\n' "${SECRET_ROOT}/provider-credentials.key"
@@ -89,6 +91,8 @@ ensure_env_default() {
 
 ensure_env_default STORAGE_CACHE_HOST_PATH "${CACHE_ROOT}"
 ensure_env_default STORAGE_CACHE_PATH /music/cache
+ensure_env_default STORAGE_CACHE_TTL_SECONDS 86400
+ensure_env_default STORAGE_RECONCILE_INTERVAL_SECONDS 900
 ensure_env_default STORAGE_PRIMARY_BACKEND google_drive
 ensure_env_default GOOGLE_DRIVE_REDIRECT_URI \
   https://audiofeel.su/api/storage/google/callback

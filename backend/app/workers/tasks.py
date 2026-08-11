@@ -31,6 +31,7 @@ from app.services.qobuz import (
 from app.services.scanner import ScanAlreadyRunning, scan_library
 from app.services.spotify import import_spotify_playlists, refresh_spotify_playlist
 from app.services.storage import (
+    cleanup_expired_storage_cache,
     health_check_account,
     migrate_local_library,
     replicate_imported_files,
@@ -1248,7 +1249,7 @@ def storage_health_check_task(
     reject_on_worker_lost=True,
 )
 def storage_migration_task(self, job_id: int):
-    """Copy local catalog files to Drive and keep all local originals."""
+    """Move local catalog files to Drive and evict verified local originals."""
 
     db = SessionLocal()
     task_id = str(self.request.id or f"direct-storage-{job_id}")[:64]
@@ -1285,7 +1286,7 @@ def storage_migration_task(self, job_id: int):
                 job_id,
                 task_id,
                 payload=json.dumps(
-                    {"phase": "copying", "storage": summary},
+                    {"phase": "moving", "storage": summary},
                     separators=(",", ":"),
                 ),
             )
@@ -1327,6 +1328,33 @@ def storage_migration_task(self, job_id: int):
         else:
             db.rollback()
         return {"status": "failed", "job_id": job_id, "error": type(exc).__name__}
+    finally:
+        db.close()
+
+
+@celery.task(name="storage_reconcile")
+def storage_reconcile_task():
+    """Retry pending uploads, evict durable local sources and sweep stale cache."""
+
+    db = SessionLocal()
+    try:
+        cache = cleanup_expired_storage_cache()
+        if settings.storage_primary_backend != "google_drive":
+            return {"status": "local_primary", "cache": cache}
+        healthy_account = db.scalar(
+            select(StorageAccount.id).where(
+                StorageAccount.provider == "google_drive",
+                StorageAccount.enabled.is_(True),
+                StorageAccount.state == "healthy",
+            ).limit(1)
+        )
+        if healthy_account is None:
+            return {"status": "not_configured", "cache": cache}
+        return {
+            "status": "completed",
+            "storage": migrate_local_library(db),
+            "cache": cache,
+        }
     finally:
         db.close()
 

@@ -29,8 +29,9 @@ class Settings(BaseSettings):
     provider_health_stale_seconds: int = Field(default=90 * 60, ge=120)
     provider_health_manual_cooldown_seconds: int = Field(default=60, ge=10)
 
-    # Google Drive is the primary durable object store. Local library files
-    # remain a verified source/cache and are never evicted implicitly.
+    # Google Drive is the primary durable object store. Local library files are
+    # temporary upload sources only and are evicted after the verified remote
+    # location has been committed.
     storage_primary_backend: str = Field(
         default="google_drive", pattern="^(google_drive|local)$"
     )
@@ -38,6 +39,8 @@ class Settings(BaseSettings):
     storage_cache_max_bytes: int = Field(
         default=20 * 1024 * 1024 * 1024, ge=64 * 1024 * 1024
     )
+    storage_cache_ttl_seconds: int = Field(default=24 * 60 * 60, ge=15 * 60)
+    storage_reconcile_interval_seconds: int = Field(default=15 * 60, ge=60)
     google_drive_redirect_uri: str = (
         "https://audiofeel.su/api/storage/google/callback"
     )

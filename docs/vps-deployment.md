@@ -27,8 +27,8 @@ bash deploy/vps/bootstrap-runtime.sh
 
 - `/etc/audiofeel/music-service.env` с правами `0600`;
 - независимые 32-byte credential keys в `/etc/audiofeel/secrets`;
-- `/srv/audiofeel/library`, `/srv/audiofeel/staging` и временный
-  `/srv/audiofeel/cache` для проверенной сборки ZIP из Drive;
+- `/srv/audiofeel/library` и `/srv/audiofeel/staging` как временные зоны
+  приёма, а также ограниченный `/srv/audiofeel/cache` для сборки ZIP из Drive;
 - случайные PostgreSQL, PWA и внутренние sidecar secrets без вывода значений.
 
 Существующий env и существующие ключи скрипт не заменяет.

@@ -38,5 +38,9 @@ celery.conf.update(
             "task": "storage_health_check",
             "schedule": settings.provider_health_interval_seconds,
         },
+        "google-drive-reconcile": {
+            "task": "storage_reconcile",
+            "schedule": settings.storage_reconcile_interval_seconds,
+        },
     },
 )

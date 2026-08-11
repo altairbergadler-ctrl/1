@@ -713,8 +713,8 @@ def _prune_missing_files(
             continue
 
         # A verified Drive object keeps the logical catalog row alive. The
-        # local path becomes an empty cache slot instead of invalidating
-        # matches or deleting remote location metadata.
+        # temporary local source is expected to disappear after upload, so a
+        # later scan only clears its path and preserves remote metadata.
         if library_file.drive_locations:
             library_file.path = None
             library_file.scanned_at = utcnow()

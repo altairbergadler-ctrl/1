@@ -23,6 +23,8 @@ def test_yandex_download_task_is_registered():
 def test_google_drive_tasks_are_registered():
     assert "storage_health_check" in celery.tasks
     assert "storage_migration" in celery.tasks
+    assert "storage_reconcile" in celery.tasks
+    assert celery.conf.beat_schedule["google-drive-reconcile"]["task"] == "storage_reconcile"
 
 
 def test_scan_task_updates_job_lifecycle(session_factory, monkeypatch, tmp_path):

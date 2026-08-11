@@ -1,4 +1,4 @@
-const CACHE_NAME = "lossless-archive-v7";
+const CACHE_NAME = "lossless-archive-v8";
 const APP_SHELL = [
   "/",
   "/index.html",

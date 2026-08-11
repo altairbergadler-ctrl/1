@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -29,10 +31,14 @@ from app.services.google_drive import (
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
 from app.services.storage import (
     ACTIVE_OAUTH_CONFIG,
+    StorageError,
     StorageNotConfigured,
     account_secret_name,
+    cleanup_expired_storage_cache,
     client_for_account,
     health_check_account,
+    migrate_local_library,
+    move_catalog_file_to_drive,
     placement_accounts,
     upload_catalog_file,
 )
@@ -313,6 +319,140 @@ def test_placement_uses_capacity_and_upload_fails_over(db, tmp_path, monkeypatch
     assert first.state == "provider_down"
     assert second.state == "healthy"
     assert db.query(DriveFileLocation).count() == 1
+
+
+def test_verified_upload_is_committed_before_local_source_is_evicted(
+    db, tmp_path, monkeypatch
+):
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "track.flac"
+    source.write_bytes(b"temporary-local-audio")
+    monkeypatch.setattr("app.services.storage.settings.music_library_path", str(library))
+    monkeypatch.setattr("app.services.storage.settings.google_drive_min_free_bytes", 0)
+    save_storage_secret(
+        db,
+        ACTIVE_OAUTH_CONFIG,
+        {
+            "client_id": "valid-client.apps.googleusercontent.com",
+            "client_secret": "valid-client-secret",
+            "redirect_uri": "https://audiofeel.su/api/storage/google/callback",
+        },
+    )
+    _add_account(db, "move@example.test")
+    file = _add_catalog_file(db, source)
+
+    monkeypatch.setattr(
+        "app.services.storage.GoogleDriveClient.upload_file",
+        lambda _client, path, **_kwargs: {
+            "id": "remote-moved",
+            "name": Path(path).name,
+            "size": str(Path(path).stat().st_size),
+            "sha1Checksum": file.sha1,
+        },
+    )
+
+    uploaded, eviction = move_catalog_file_to_drive(db, file)
+    db.refresh(file)
+
+    assert uploaded is True
+    assert eviction == "evicted"
+    assert source.exists() is False
+    assert file.path is None
+    assert db.query(DriveFileLocation).count() == 1
+
+
+def test_database_failure_before_remote_persistence_preserves_local_source(
+    db, tmp_path, monkeypatch
+):
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "track.flac"
+    source.write_bytes(b"must-not-be-lost")
+    monkeypatch.setattr("app.services.storage.settings.music_library_path", str(library))
+    monkeypatch.setattr("app.services.storage.settings.google_drive_min_free_bytes", 0)
+    save_storage_secret(
+        db,
+        ACTIVE_OAUTH_CONFIG,
+        {
+            "client_id": "valid-client.apps.googleusercontent.com",
+            "client_secret": "valid-client-secret",
+            "redirect_uri": "https://audiofeel.su/api/storage/google/callback",
+        },
+    )
+    _add_account(db, "commit-failure@example.test")
+    file = _add_catalog_file(db, source)
+    monkeypatch.setattr(
+        "app.services.storage.GoogleDriveClient.upload_file",
+        lambda _client, path, **_kwargs: {
+            "id": "remote-before-failed-commit",
+            "name": Path(path).name,
+            "size": str(Path(path).stat().st_size),
+            "sha1Checksum": file.sha1,
+        },
+    )
+    monkeypatch.setattr(db, "commit", lambda: (_ for _ in ()).throw(RuntimeError("db")))
+
+    with pytest.raises(StorageError):
+        move_catalog_file_to_drive(db, file)
+
+    assert source.is_file()
+    assert db.query(DriveFileLocation).count() == 0
+
+
+def test_migration_evicts_old_local_copy_that_is_already_remote(
+    db, tmp_path, monkeypatch
+):
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "legacy.flac"
+    source.write_bytes(b"legacy-local-copy")
+    monkeypatch.setattr("app.services.storage.settings.music_library_path", str(library))
+    account = _add_account(db, "legacy@example.test")
+    file = _add_catalog_file(db, source)
+    db.add(
+        DriveFileLocation(
+            file_id=file.id,
+            account_id=account.id,
+            remote_file_id="remote-legacy",
+            remote_name=source.name,
+            size_bytes=file.size_bytes,
+            sha1=file.sha1,
+            state="healthy",
+        )
+    )
+    db.commit()
+
+    summary = migrate_local_library(db)
+    db.refresh(file)
+
+    assert summary["already_remote"] == 1
+    assert summary["evicted"] == 1
+    assert source.exists() is False
+    assert file.path is None
+
+
+def test_cache_sweeper_removes_only_expired_audiofeel_temporary_paths(
+    tmp_path, monkeypatch
+):
+    stale = tmp_path / "audiofeel-stale"
+    fresh = tmp_path / "audiofeel-fresh"
+    unrelated = tmp_path / "keep-me"
+    stale.mkdir()
+    fresh.mkdir()
+    unrelated.mkdir()
+    (stale / "track.flac").write_bytes(b"stale")
+    old = time.time() - 7200
+    os.utime(stale, (old, old))
+    monkeypatch.setattr("app.services.storage.settings.storage_cache_path", str(tmp_path))
+    monkeypatch.setattr("app.services.storage.settings.storage_cache_ttl_seconds", 3600)
+
+    summary = cleanup_expired_storage_cache()
+
+    assert summary == {"removed": 1, "failed": 0}
+    assert stale.exists() is False
+    assert fresh.is_dir()
+    assert unrelated.is_dir()
 
 
 def test_each_account_keeps_the_oauth_client_that_issued_its_refresh_token(db):

@@ -184,8 +184,8 @@ class File(Base):
     __tablename__ = "files"
     id = Column(Integer, primary_key=True)
     track_id = Column(ForeignKey("tracks.id"), nullable=False)
-    # A local path is an optional cache/source once a verified remote location
-    # exists.  The catalog row remains stable when the local copy is evicted.
+    # A local path is a temporary upload source. Once a verified remote
+    # location is durable, it is cleared and the catalog row remains stable.
     path = Column(Text, unique=True, nullable=True)
     format = Column(String(16))
     bit_depth = Column(Integer)

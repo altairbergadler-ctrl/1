@@ -501,11 +501,11 @@ async function renderStorage() {
           <div>
             <p class="eyebrow">БИБЛИОТЕКА · GOOGLE DRIVE</p>
             <h1>Общее облачное хранилище</h1>
-            <p class="lede">Каждый подключённый аккаунт добавляет свой свободный объём. Новые файлы попадают на здоровый диск с наибольшим запасом; локальные оригиналы не удаляются автоматически.</p>
+            <p class="lede">Каждый подключённый аккаунт добавляет свой свободный объём. Google Drive хранит постоянную библиотеку, а локальный диск используется только как временный буфер до проверенной загрузки.</p>
           </div>
           <div class="action-row">
             ${data.oauth.configured ? '<button type="button" data-action="storage-connect">Добавить аккаунт</button>' : ""}
-            ${data.accounts.length ? '<button class="secondary" type="button" data-action="storage-migrate">Скопировать локальную библиотеку</button>' : ""}
+            ${data.accounts.length ? '<button class="secondary" type="button" data-action="storage-migrate">Перенести временные файлы</button>' : ""}
           </div>
         </section>
         <section class="storage-summary">
@@ -613,10 +613,10 @@ async function migrateLocalStorage(button) {
   button.disabled = true;
   try {
     const job = await api("/api/storage/migrate-local", { method: "POST" });
-    showToast("Копирование в Google Drive запущено", 6000);
-    const finished = await waitForJob(job.id, "Копирование библиотеки завершилось ошибкой");
+    showToast("Перенос в Google Drive запущен", 6000);
+    const finished = await waitForJob(job.id, "Перенос библиотеки завершился ошибкой");
     const summary = finished.payload?.storage || {};
-    showToast(`Google Drive: скопировано ${summary.uploaded || 0}, ошибок ${summary.failed || 0}`, 8000);
+    showToast(`Google Drive: загружено ${summary.uploaded || 0}, локально очищено ${summary.evicted || 0}, ошибок ${summary.failed || 0}`, 8000);
     await renderStorage();
   } catch (exception) {
     showToast(exception.message);
