@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from urllib.request import urlopen
 
 import pytest
@@ -41,9 +42,25 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v8";' in service_worker
+    assert 'const CACHE_NAME = "lossless-archive-v9";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
+
+
+def test_google_drive_guide_maps_current_google_console_fields():
+    app_script = (
+        Path(__file__).resolve().parents[2] / "frontend" / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Google Auth Platform → Audience" in app_script
+    assert "Google Auth Platform → Clients" in app_script
+    assert "Authorized JavaScript origins" in app_script
+    assert "https://audiofeel.su/api/storage/google/callback" in app_script
+    assert "Google показывает полный secret только при создании" in app_script
+    assert "Additional information" in app_script
+    assert "Add client secret" in app_script
+    assert "Маска вида •••• или **** не подходит" in app_script
+    assert "Сейчас ничего вводить не нужно" in app_script
 
 
 @pytest.mark.skipif(

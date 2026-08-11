@@ -672,6 +672,18 @@ button[disabled] {
   color: var(--accent-strong);
 }
 
+.storage-ready-note {
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  background: rgb(87 225 184 / 9%);
+}
+
+.storage-field-map strong {
+  color: var(--ink);
+}
+
 .credential-warning {
   padding: 11px 12px;
   border-left: 3px solid var(--review);
@@ -765,6 +777,35 @@ button[disabled] {
 
 .storage-config-card h2 {
   font-size: 34px;
+}
+
+.storage-oauth-form {
+  align-self: start;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgb(13 17 21 / 52%);
+}
+
+.storage-oauth-form summary {
+  padding: 14px 16px;
+  color: var(--accent-strong);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.storage-oauth-form[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.storage-oauth-form form {
+  padding: 16px;
+}
+
+.storage-oauth-form small {
+  margin: -3px 0 6px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .storage-config-card form,

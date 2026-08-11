@@ -455,18 +455,35 @@ function storageAccountCard(account) {
   `;
 }
 
-function googleDriveGuide() {
+function googleDriveGuide(configured) {
   return `
-    <details class="credential-guide storage-guide" open>
-      <summary>Как подготовить доступ Google Drive</summary>
+    <details class="credential-guide storage-guide" ${configured ? "" : "open"}>
+      <summary>${configured ? "Где находятся Client ID и Client secret" : "Первичная настройка Google Drive — по шагам"}</summary>
       <div class="credential-guide-body">
+        ${configured ? `
+          <p class="storage-ready-note"><strong>У вас уже всё подключено.</strong> Повторно искать Client ID и Client secret не нужно. Чтобы добавить ещё один диск, нажмите «Добавить аккаунт Google Drive» и войдите в другой Google-аккаунт.</p>
+        ` : ""}
+        <h3>Если настраиваете впервые</h3>
         <ol>
-          <li>В <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer noopener">Google Cloud Console</a> создайте отдельный проект Audiofeel.</li>
-          <li>Включите <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer noopener">Google Drive API</a>.</li>
-          <li>Настройте экран OAuth. Пока приложение в режиме тестирования, добавьте свои Google-адреса в список тестовых пользователей.</li>
-          <li>Создайте OAuth Client ID типа <strong>Web application</strong>.</li>
-          <li>В Authorized redirect URIs точно добавьте:<br><code>https://audiofeel.su/api/storage/google/callback</code></li>
-          <li>Скопируйте Client ID и Client secret в форму ниже. Сервис сначала проверит новый доступ и только затем сделает его активным.</li>
+          <li>Откройте <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer noopener">Google Cloud Console</a>. В верхней панели выберите проект Audiofeel или создайте новый.</li>
+          <li>На странице <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer noopener">Google Drive API</a> нажмите <strong>Enable</strong>. Если вместо неё показана кнопка <strong>Disable</strong>, API уже включён.</li>
+          <li>Откройте <a href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noreferrer noopener">Google Auth Platform → Audience</a>. Для режима <strong>Testing</strong> в блоке <strong>Test users</strong> нажмите <strong>Add users</strong> и добавьте Google-адрес каждого подключаемого аккаунта.</li>
+          <li>Откройте <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer noopener">Google Auth Platform → Clients</a>, нажмите <strong>Create client</strong> и выберите тип <strong>Web application</strong>.</li>
+          <li><strong>Authorized JavaScript origins</strong> оставьте пустым. В <strong>Authorized redirect URIs</strong> нажмите <strong>Add URI</strong> и вставьте точно:<br><code>https://audiofeel.su/api/storage/google/callback</code></li>
+          <li>Нажмите <strong>Create</strong>. В появившемся окне сразу скопируйте <strong>Client ID</strong> и <strong>Client secret</strong>. Google показывает полный secret только при создании — после закрытия окна его уже нельзя посмотреть.</li>
+        </ol>
+        <h3>Что куда вставлять в Audiofeel</h3>
+        <dl class="storage-field-map">
+          <div><dt>Google: <strong>Client ID</strong></dt><dd>→ поле Audiofeel «Client ID из Google»</dd></div>
+          <div><dt>Google: <strong>Client secret</strong></dt><dd>→ поле Audiofeel «Client secret из окна Create / Add secret»</dd></div>
+          <div><dt>Google: <strong>Authorized redirect URI</strong></dt><dd>→ только адрес callback выше; в Audiofeel его вставлять не надо</dd></div>
+        </dl>
+        <h3>Если окно с Client secret уже закрыто</h3>
+        <ol>
+          <li>Откройте <strong>Google Auth Platform → Clients</strong> и нажмите на имя клиента, например <strong>Audiofeel Web</strong>.</li>
+          <li>Полный <strong>Client ID</strong> находится справа в блоке <strong>Additional information</strong>.</li>
+          <li>В блоке <strong>Client secrets</strong> старый secret виден только как маска — её вставлять нельзя. Нажмите <strong>Add client secret</strong> и сразу скопируйте новый secret из одноразового окна.</li>
+          <li>В Audiofeel раскройте «Заменить Client ID и Client secret», вставьте оба значения и пройдите вход Google. Старые рабочие данные сохранятся, если новые не пройдут проверку.</li>
         </ol>
         <p class="credential-warning">Audiofeel запрашивает ограниченный доступ <code>drive.file</code>: приложение видит только созданные и выбранные через него файлы. Пароль Google вводится только на странице Google.</p>
       </div>
@@ -504,7 +521,7 @@ async function renderStorage() {
             <p class="lede">Каждый подключённый аккаунт добавляет свой свободный объём. Google Drive хранит постоянную библиотеку, а локальный диск используется только как временный буфер до проверенной загрузки.</p>
           </div>
           <div class="action-row">
-            ${data.oauth.configured ? '<button type="button" data-action="storage-connect">Добавить аккаунт</button>' : ""}
+            ${data.oauth.configured ? '<button type="button" data-action="storage-connect">Добавить аккаунт Google Drive</button>' : ""}
             ${data.accounts.length ? '<button class="secondary" type="button" data-action="storage-migrate">Перенести временные файлы</button>' : ""}
           </div>
         </section>
@@ -513,21 +530,27 @@ async function renderStorage() {
           <span><strong>${formatBytes(data.total_usage_bytes)}</strong><small>использовано</small></span>
           <span><strong>${formatBytes(data.accounts.length ? data.total_free_bytes : 0)}</strong><small>свободно суммарно</small></span>
         </section>
-        ${googleDriveGuide()}
+        ${googleDriveGuide(data.oauth.configured)}
         <section class="storage-config-card">
           <div>
             <p class="eyebrow">OAUTH-ПРИЛОЖЕНИЕ</p>
             <h2>${data.oauth.configured ? "Доступ настроен" : "Первичная настройка"}</h2>
             <p class="muted">Сохранённые Client secret и refresh tokens никогда не возвращаются в API. Новые данные проходят вход Google до замены действующих.</p>
+            ${data.oauth.configured ? '<p class="storage-ready-note"><strong>Сейчас ничего вводить не нужно.</strong> Форма справа нужна только при замене самого OAuth-клиента или утраченного Client secret.</p>' : ""}
           </div>
-          <form id="google-oauth-form" autocomplete="off">
-            <label for="google-client-id">Client ID</label>
-            <input id="google-client-id" name="client_id" type="text" autocomplete="off" required minlength="20" placeholder="…apps.googleusercontent.com">
-            <label for="google-client-secret">Client secret</label>
-            <input id="google-client-secret" name="client_secret" type="password" autocomplete="new-password" required minlength="8">
-            <button type="submit">Проверить через Google</button>
-            <p class="form-error" role="alert"></p>
-          </form>
+          <details class="storage-oauth-form" ${data.oauth.configured ? "" : "open"}>
+            <summary>${data.oauth.configured ? "Заменить Client ID и Client secret" : "Ввести данные из Google"}</summary>
+            <form id="google-oauth-form" autocomplete="off">
+              <label for="google-client-id">Client ID из Google</label>
+              <input id="google-client-id" name="client_id" type="text" autocomplete="off" required minlength="20" placeholder="…apps.googleusercontent.com" aria-describedby="google-client-id-help">
+              <small id="google-client-id-help">Берётся в Google Auth Platform → Clients → ваш клиент → Additional information → Client ID.</small>
+              <label for="google-client-secret">Client secret из окна Create / Add secret</label>
+              <input id="google-client-secret" name="client_secret" type="password" autocomplete="new-password" required minlength="8" aria-describedby="google-client-secret-help">
+              <small id="google-client-secret-help">Маска вида •••• или **** не подходит. Если полный secret потерян, в Google нажмите Add client secret и скопируйте новый сразу.</small>
+              <button type="submit">Проверить через Google и применить</button>
+              <p class="form-error" role="alert"></p>
+            </form>
+          </details>
         </section>
         ${data.accounts.length
           ? `<section class="storage-account-grid">${data.accounts.map(storageAccountCard).join("")}</section>`
