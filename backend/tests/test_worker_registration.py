@@ -2,7 +2,7 @@ import json
 
 from sqlalchemy import select
 
-from app.models import Job, JobStatus
+from app.models import Job, JobScope, JobStatus
 from app.services.scanner import ScanSummary
 from app.workers.celery_app import celery
 from app.workers.tasks import scan_library_task
@@ -29,7 +29,12 @@ def test_google_drive_tasks_are_registered():
 
 def test_scan_task_updates_job_lifecycle(session_factory, monkeypatch, tmp_path):
     session = session_factory()
-    job = Job(type="scan_library", status=JobStatus.pending, payload="{}")
+    job = Job(
+        type="scan_library",
+        scope=JobScope.system,
+        status=JobStatus.pending,
+        payload="{}",
+    )
     session.add(job)
     session.commit()
     job_id = job.id
@@ -65,7 +70,12 @@ def test_scan_task_stops_when_its_lease_is_revoked(
     session_factory, monkeypatch, tmp_path
 ):
     session = session_factory()
-    job = Job(type="scan_library", status=JobStatus.pending, payload="{}")
+    job = Job(
+        type="scan_library",
+        scope=JobScope.system,
+        status=JobStatus.pending,
+        payload="{}",
+    )
     session.add(job)
     session.commit()
     job_id = job.id

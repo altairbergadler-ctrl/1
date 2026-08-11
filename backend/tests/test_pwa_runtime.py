@@ -42,7 +42,7 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v12";' in service_worker
+    assert 'const CACHE_NAME = "lossless-archive-v14";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
 
@@ -73,9 +73,29 @@ def test_playlist_page_connects_spotify_before_importing_one_url():
     assert 'api("/api/playlists/import-url"' in app_script
     assert 'api("/api/sources")' in app_script
     assert 'data-action="spotify-connect"' in app_script
-    assert 'window.location.assign("/api/sources/spotify/connect")' in app_script
+    assert 'api("/api/sources/spotify/connect", { method: "POST" })' in app_script
+    assert "window.location.assign(result.authorization_url)" in app_script
     assert "Client ID, Client Secret и пароль вводить в Audiofeel не нужно" in app_script
     assert ".playlist-import-card" in styles
+
+
+def test_pwa_uses_google_server_session_csrf_and_owner_user_admin():
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    app_script = (root / "app.js").read_text(encoding="utf-8")
+    nginx = (root / "nginx.conf").read_text(encoding="utf-8")
+
+    assert 'href="/api/auth/google/start"' in app_script
+    assert 'api("/api/auth/me"' in app_script
+    assert 'headers.set("X-CSRF-Token", csrfToken)' in app_script
+    assert 'api("/api/auth/logout", { method: "POST" })' in app_script
+    assert 'api("/api/admin/users")' in app_script
+    assert 'id="user-invite-form"' in app_script
+    assert 'data-action="user-disable"' in app_script
+    assert 'data-action="user-revoke-sessions"' in app_script
+    assert 'id="recovery-login-form"' in app_script
+    assert "localStorage" not in app_script
+    assert "sessionStorage" not in app_script
+    assert "access_log off;" in nginx
 
 
 def test_playlist_page_imports_csv_m3u_or_text_without_provider_auth():

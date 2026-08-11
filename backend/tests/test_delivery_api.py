@@ -21,12 +21,15 @@ from app.models import (
     Track,
 )
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
+from tests.helpers import ensure_user
 
 
 def _seed_delivery(db, root: Path):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
     playlist = Playlist(
         source=source,
+        user_id=user.id,
         external_id="delivery-playlist",
         name="Road / Trip",
     )

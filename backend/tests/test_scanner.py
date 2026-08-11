@@ -233,9 +233,13 @@ def test_deleting_last_file_invalidates_ready_match(db, three_flac_library):
     deleted = next(three_flac_library.rglob("03 - Fallback Title.flac"))
     library_file = db.scalar(select(File).where(File.path == str(deleted.resolve())))
     track_id = library_file.track_id
-    source = PlaylistSource(service=ServiceEnum.spotify)
+    from tests.helpers import ensure_user
+
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
     playlist = Playlist(
         source=source,
+        user_id=user.id,
         external_id="deleted-track",
         name="Deleted track",
         track_count=1,

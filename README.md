@@ -1,4 +1,4 @@
-# Music Service — MVP (Этап 4: матчинг, выдача и PWA)
+# Music Service — MVP (Google Sign-In и multi-user)
 
 Hi-Res музыкальный архив: импорт плейлистов Spotify/Яндекс.Музыки и
 CSV/M3U/текстовых списков,
@@ -11,11 +11,21 @@ CSV/M3U/текстовых списков,
 ## Запуск
 
 ```bash
-cp .env.example .env        # заполнить APP_AUTH_TOKEN и настройки
+cp .env.example .env        # APP_AUTH_TOKEN — только owner recovery
+mkdir -p data/secrets
+openssl rand 32 > data/secrets/auth.key
+: > data/secrets/google-login-client-secret
+chmod 600 data/secrets/auth.key data/secrets/google-login-client-secret
 docker compose up --build
 ```
 
-Проверка API: `curl http://localhost:8000/api/health` → `{"status":"ok"}`.
+`auth.key` — независимый server-session key. Файл Google Login secret может
+оставаться пустым до создания отдельного Web OAuth client; в таком состоянии
+health и recovery доступны, а начало Google-входа безопасно возвращает ошибку
+конфигурации. Ни один из этих файлов не добавляется в Git.
+
+Проверка API: `curl http://localhost:8000/api/health` → status `ok` и
+`release_sha` текущего deployment.
 PWA открывается на `http://localhost:8080`.
 
 Миграция выполняется отдельным сервисом `migrate` до запуска API и Celery.
@@ -28,19 +38,26 @@ backend его не видит. Яндекс-загрузки использую
 
 ## Миграции
 
-Начальная миграция уже находится в `backend/alembic/versions/`. Для ручного
-применения: `docker compose run --rm migrate`.
+Текущий head — `0009_google_user_auth_contract`. Сервис `migrate` сам выполняет
+двухфазный expand → credential/ownership backfill → contract и безопасно
+останавливается при неоднозначном владельце. Для ручного применения:
+`docker compose run --rm migrate`. Модель, backup и rollback описаны в
+[`docs/google-user-auth.md`](docs/google-user-auth.md).
 
 ## API библиотеки
 
-Все запросы, кроме health, требуют заголовок
-`Authorization: Bearer <APP_AUTH_TOKEN>`.
+Все запросы, кроме health и начала Google login, требуют собственную
+серверную Google session в `HttpOnly; SameSite=Lax; Path=/api` cookie. Raw
+session token хранится только в cookie, в БД находится его HMAC hash. Для
+state-changing API дополнительно обязательны exact Origin/Referer и
+session-bound `X-CSRF-Token`; в production установлено
+`AUTH_COOKIE_SECURE=true`.
 
-PWA выполняет `POST /api/auth/login` с тем же токеном и получает HttpOnly
-SameSite-cookie. Bearer-аутентификация для API остаётся доступной. Для HTTPS
-установите `AUTH_COOKIE_SECURE=true`.
+`APP_AUTH_TOKEN` не является Bearer и не открывает обычный API. Он используется
+только отдельным краткоживущим `/#/recovery` для первоначального приглашения и
+аварийного восстановления bootstrap owner.
 
-- `POST /api/library/scan` — создаёт фоновое задание сканирования;
+- `POST /api/library/scan` — owner-only фоновое сканирование;
 - `GET /api/jobs/{id}` — возвращает статус и результат задания;
 - `GET /api/library/stats` — файлы, треки, альбомы, объём и форматы;
 - `GET /api/library/albums?q=` — поиск альбомов и исполнителей.
@@ -51,7 +68,8 @@ Yandex fallback-контейнеры `.m4a`, `.aac`, `.mp3`; читает тег
 
 ## Источники и плейлисты
 
-- `GET /api/sources/spotify/connect` — начало Spotify Authorization Code OAuth;
+- `POST /api/sources/spotify/connect` — начало Spotify Authorization Code OAuth
+  с session-bound state;
 - `GET /api/sources/spotify/callback` — callback с одноразовым Redis state;
 - `PUT /api/providers/yandex/credentials` — проверка и атомарная ротация токена;
 - `PUT /api/providers/qobuz/credentials` — проверка и атомарная ротация token/user_id;
@@ -73,9 +91,12 @@ Spotify требует `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и точн�
 `localhost` как OAuth redirect URI. В текущем Development Mode содержимое
 плейлиста доступно только владельцу и соавторам; подписанные чужие плейлисты
 могут быть перечислены, но будут пропущены провайдером с `403`.
-Yandex/Qobuz credentials вводятся на странице PWA «Провайдеры», проверяются
-до активации и хранятся в AES-256-GCM vault. Старое значение остаётся активным,
-если проверка нового завершилась ошибкой. Токены никогда не возвращаются API.
+System Yandex/Qobuz acquisition credentials вводятся owner на странице PWA
+«Провайдеры», проверяются до активации и хранятся в AES-256-GCM vault.
+Spotify и Yandex playlist credentials хранятся отдельно по `user_id`: OAuth
+одного пользователя не перезаписывает другого. Старое system-значение остаётся
+активным, если проверка нового завершилась ошибкой. Токены никогда не
+возвращаются API.
 
 Spotify пропускает неизменившиеся плейлисты по `snapshot_id`. Для
 Яндекс.Музыки вычисляется детерминированный SHA-256 по версии и упорядоченному
@@ -124,11 +145,30 @@ review; ручные решения повторный запуск не пер�
 
 ## PWA
 
-Мобильный интерфейс включает вход, список плейлистов с прогрессом, статусы
-READY/REVIEW/MISSING, ручной review и скачивание трека, ZIP или M3U8. Service
-Worker кэширует только оболочку приложения; API и музыкальные файлы в кэш не
-попадают. Nginx проксирует `/api/` к backend, поэтому cookie и скачивания
-работают в одном origin.
+Мобильный интерфейс включает invitation-only «Войти через Google», текущего
+пользователя, logout, список личных плейлистов с прогрессом, статусы
+READY/REVIEW/MISSING, ручной review и скачивание трека, ZIP или M3U8. Owner
+дополнительно видит разделы «Пользователи», «Провайдеры» и «Хранилище»: можно
+создать приглашение, отключить пользователя и отозвать все его sessions.
+Service Worker кэширует только оболочку приложения; API и музыкальные файлы в
+кэш не попадают. Session и CSRF tokens не записываются в Web Storage. Nginx
+проксирует `/api/` без access log, поэтому cookie и скачивания работают в одном
+origin, а OAuth codes не попадают в access log.
+
+## Google Sign-In и private ownership
+
+Google login использует отдельный OAuth/OIDC client и callback
+`https://audiofeel.su/api/auth/google/callback`, минимальные scopes
+`openid email profile`, PKCE S256, state, nonce и Google JWKS. Google Drive
+остаётся независимым infrastructure OAuth-контуром с callback
+`/api/storage/google/callback`.
+
+Плейлисты, sources, user jobs, matching review и download grants принадлежат
+конкретному пользователю; чужой существующий ID отвечает `404`. При этом
+`Artist/Album/Track/File`, SHA-1 и Drive location физически общие и
+дедуплицированные: один файл может обслужить несколько личных READY items.
+Полная схема, endpoint matrix и production runbook —
+[`docs/google-user-auth.md`](docs/google-user-auth.md).
 
 ## Qobuz
 
@@ -280,12 +320,14 @@ Google-аккаунтов образуют общий пул объёма: но�
 ## Тесты
 
 ```bash
-docker compose run --rm backend pytest -q
+docker compose run --rm -v "${PWD}/frontend:/frontend:ro" backend pytest -q
 ```
 
 Тесты генерируют короткие аудиофайлы через ffmpeg, проверяют повторный скан,
 fallback, SHA-1-дедупликацию, API, MusicBrainz, Spotify и Яндекс.Музыку с
-моками, каскад matcher, ручной review, Range и содержимое ZIP/M3U8. Qobuz
+моками, Google OIDC claims/JWKS/PKCE/state/nonce, hashed sessions, CSRF,
+roles, migration rollback и отрицательные cross-user IDOR, каскад matcher,
+ручной review, Range и содержимое ZIP/M3U8. Qobuz
 тестируется на границе приватного sidecar, включая строгий выбор записи и
 end-to-end сценарий fetch-missing → staging → верификация → библиотека → scan
 → matching на сгенерированных FLAC. Яндекс-тесты проверяют signed contract,
@@ -301,6 +343,9 @@ Sidecar отдельно проверяет allowlist,
 - `backend/app/services/scanner.py` — локальный lossless-каталог
 - `backend/app/services/musicbrainz.py` — внешнее обогащение и Redis-кэш
 - `backend/app/services/spotify.py` — OAuth, refresh токенов и импорт Spotify
+- `backend/app/services/google_login.py` — OIDC discovery/JWKS/PKCE и invitation binding
+- `backend/app/services/authentication.py` — hashed server sessions и CSRF
+- `backend/app/services/user_credentials.py` — user-scoped provider vault
 - `backend/app/services/playlist_converter.py` — CSV/M3U/текстовый импорт
 - `backend/app/services/yandex.py` — импорт Яндекс.Музыки
 - `backend/app/services/yandex_acquisition.py` — Yandex provider: signed
@@ -321,6 +366,7 @@ Sidecar отдельно проверяет allowlist,
 - `data/qobuz-staging/` — staging Qobuz-загрузок (mount `/music/staging`)
 - `docs/music-service-handoff.md` — проверенное состояние MVP и следующие итерации
 - `docs/playlist-import.md` — OAuth-ссылки и независимый конвертер плейлистов
+- `docs/google-user-auth.md` — Google Sign-In, ownership, migration и recovery
 - `docs/qobuz-dl-assessment.md` — security/terms/code audit интеграции Qobuz
 - `docs/yandex-music-api-assessment.md` — audit и ограничения lossless flow
 - `docs/yandex-acquisition-acceptance.md` — Docker/live-приёмка Яндекса

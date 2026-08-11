@@ -6,12 +6,13 @@ from sqlalchemy import case, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth
+from app.auth import require_auth, require_csrf
 from app.api.matching import _queue_matching_job
 from app.config import settings
 from app.db import get_db
 from app.models import (
     Job,
+    JobScope,
     JobStatus,
     Match,
     MatchStatus,
@@ -19,6 +20,7 @@ from app.models import (
     PlaylistItem,
     PlaylistSource,
     ServiceEnum,
+    User,
     utcnow,
 )
 from app.schemas import (
@@ -32,7 +34,7 @@ from app.schemas import (
     PlaylistListOut,
     PlaylistUrlImportIn,
 )
-from app.services.credentials import has_credential
+from app.services.user_credentials import has_user_credential
 from app.services.playlist_converter import (
     PlaylistConversionError,
     convert_playlist_content,
@@ -66,7 +68,7 @@ def _status_counts_subquery():
     )
 
 
-def _playlist_query(playlist_id: int | None = None):
+def _playlist_query(user_id: int, playlist_id: int | None = None):
     counts = _status_counts_subquery()
     statement = (
         select(
@@ -80,6 +82,7 @@ def _playlist_query(playlist_id: int | None = None):
         .join(PlaylistSource, PlaylistSource.id == Playlist.source_id)
         .outerjoin(counts, counts.c.playlist_id == Playlist.id)
     )
+    statement = statement.where(Playlist.user_id == user_id)
     return (
         statement.where(Playlist.id == playlist_id)
         if playlist_id is not None
@@ -155,6 +158,7 @@ def _reuse_active_job_or_raise(
 
 def _queue_import_job(
     db: Session,
+    user_id: int,
     source_id: int,
     *,
     playlist_id: int | None = None,
@@ -217,6 +221,9 @@ def _queue_import_job(
     job = Job(
         type="import_playlists",
         source_id=source_id,
+        playlist_id=playlist_id,
+        user_id=user_id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps(payload, separators=(",", ":")),
         heartbeat_at=utcnow(),
@@ -271,8 +278,17 @@ def _queue_import_job(
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def import_playlists(payload: PlaylistImportIn, db: Session = Depends(get_db)):
-    source = db.get(PlaylistSource, payload.source_id)
+def import_playlists(
+    payload: PlaylistImportIn,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    source = db.scalar(
+        select(PlaylistSource).where(
+            PlaylistSource.id == payload.source_id,
+            PlaylistSource.user_id == current_user.id,
+        )
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Playlist source not found")
     if source.service == ServiceEnum.manual:
@@ -280,7 +296,7 @@ def import_playlists(payload: PlaylistImportIn, db: Session = Depends(get_db)):
             status_code=422,
             detail="Manual playlists must be imported from content",
         )
-    return _queue_import_job(db, source.id)
+    return _queue_import_job(db, current_user.id, source.id)
 
 
 @router.post(
@@ -290,6 +306,7 @@ def import_playlists(payload: PlaylistImportIn, db: Session = Depends(get_db)):
 )
 def import_playlist_url(
     payload: PlaylistUrlImportIn,
+    current_user: User = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
     try:
@@ -298,14 +315,19 @@ def import_playlist_url(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
+        select(PlaylistSource).where(
+            PlaylistSource.user_id == current_user.id,
+            PlaylistSource.service == ServiceEnum.spotify,
+        )
     )
-    if source is None or not has_credential(db, ServiceEnum.spotify.value):
+    if source is None or not has_user_credential(
+        db, current_user.id, ServiceEnum.spotify.value
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Connect Spotify before importing a playlist",
         )
-    return _queue_import_job(db, source.id, url=url)
+    return _queue_import_job(db, current_user.id, source.id, url=url)
 
 
 @router.post(
@@ -315,17 +337,19 @@ def import_playlist_url(
 )
 def import_playlist_content(
     payload: PlaylistContentImportIn,
+    current_user: User = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
     try:
         converted = convert_playlist_content(payload.content, payload.format)
         playlist = save_converted_playlist(
             db,
+            user_id=current_user.id,
             name=payload.name,
             content=payload.content,
             converted=converted,
         )
-        matching_job = _queue_matching_job(db, playlist.id)
+        matching_job = _queue_matching_job(db, current_user.id, playlist.id)
     except PlaylistConversionError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -342,11 +366,14 @@ def import_playlist_content(
 def list_playlists(
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
-    total = db.scalar(select(func.count(Playlist.id))) or 0
+    total = db.scalar(
+        select(func.count(Playlist.id)).where(Playlist.user_id == current_user.id)
+    ) or 0
     rows = db.execute(
-        _playlist_query()
+        _playlist_query(current_user.id)
         .order_by(Playlist.updated_at.desc(), Playlist.id)
         .offset(offset)
         .limit(limit)
@@ -355,8 +382,12 @@ def list_playlists(
 
 
 @router.get("/{playlist_id}", response_model=PlaylistDetailOut)
-def get_playlist(playlist_id: int, db: Session = Depends(get_db)):
-    row = db.execute(_playlist_query(playlist_id)).first()
+def get_playlist(
+    playlist_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    row = db.execute(_playlist_query(current_user.id, playlist_id)).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     return _serialize_playlist(row)
@@ -368,9 +399,15 @@ def get_playlist_items(
     item_status: PlaylistItemStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
-    if db.get(Playlist, playlist_id) is None:
+    if db.scalar(
+        select(Playlist.id).where(
+            Playlist.id == playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    ) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
 
     statement = (
@@ -417,8 +454,17 @@ def get_playlist_items(
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def refresh_playlist(playlist_id: int, db: Session = Depends(get_db)):
-    playlist = db.get(Playlist, playlist_id)
+def refresh_playlist(
+    playlist_id: int,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    playlist = db.scalar(
+        select(Playlist).where(
+            Playlist.id == playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    )
     if playlist is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     if playlist.source.service == ServiceEnum.manual:
@@ -426,4 +472,9 @@ def refresh_playlist(playlist_id: int, db: Session = Depends(get_db)):
             status_code=422,
             detail="Manual playlists are replaced by importing a new file",
         )
-    return _queue_import_job(db, playlist.source_id, playlist_id=playlist.id)
+    return _queue_import_job(
+        db,
+        current_user.id,
+        playlist.source_id,
+        playlist_id=playlist.id,
+    )

@@ -11,6 +11,7 @@ from app.models import (
     Artist,
     File,
     Job,
+    JobScope,
     JobStatus,
     Match,
     MatchStatus,
@@ -23,12 +24,15 @@ from app.models import (
 from app.services.matcher import run_matching
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
 from app.workers.tasks import run_matching_task
+from tests.helpers import ensure_user
 
 
 def _seed_review_case(db, tmp_path: Path):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
     playlist = Playlist(
         source=source,
+        user_id=user.id,
         external_id="review-playlist",
         name="Review Playlist",
         snapshot_hash="review-snapshot",
@@ -83,7 +87,7 @@ def _seed_review_case(db, tmp_path: Path):
             )
         )
     db.commit()
-    run_matching(db, playlist.id)
+    run_matching(db, user.id, playlist.id)
     db.refresh(item)
     return playlist, item
 
@@ -91,9 +95,11 @@ def _seed_review_case(db, tmp_path: Path):
 def test_run_endpoint_queues_one_background_job(
     api_client, auth_headers, db, monkeypatch
 ):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
     playlist = Playlist(
         source=source,
+        user_id=user.id,
         external_id="run-playlist",
         name="Run Playlist",
     )
@@ -102,7 +108,9 @@ def test_run_endpoint_queues_one_background_job(
     queued: list[tuple[int, int | None]] = []
     monkeypatch.setattr(
         "app.api.matching.run_matching_task.delay",
-        lambda job_id, playlist_id=None: queued.append((job_id, playlist_id)),
+        lambda job_id, user_id, playlist_id=None: queued.append(
+            (job_id, user_id, playlist_id)
+        ),
     )
 
     first = api_client.post(
@@ -120,13 +128,16 @@ def test_run_endpoint_queues_one_background_job(
     assert duplicate.status_code == 202
     assert duplicate.json()["id"] == first.json()["id"]
     assert first.json()["type"] == "run_matching"
-    assert queued == [(first.json()["id"], playlist.id)]
+    assert queued == [(first.json()["id"], user.id, playlist.id)]
 
 
 def test_database_rejects_two_active_matching_jobs(db):
+    user = ensure_user(db)
     db.add(
         Job(
             type="run_matching",
+            user_id=user.id,
+            scope=JobScope.user,
             status=JobStatus.pending,
             payload='{"playlist_id":null}',
         )
@@ -135,6 +146,8 @@ def test_database_rejects_two_active_matching_jobs(db):
     db.add(
         Job(
             type="run_matching",
+            user_id=user.id,
+            scope=JobScope.user,
             status=JobStatus.running,
             payload='{"playlist_id":null}',
         )
@@ -174,7 +187,7 @@ def test_review_endpoint_and_manual_resolve(api_client, auth_headers, db, tmp_pa
         "status": "READY",
     }
     db.expire_all()
-    run_matching(db, playlist.id)
+    run_matching(db, playlist.user_id, playlist.id)
     assert db.get(Match, item.match.id).track_id == candidate_id
     assert db.get(Match, item.match.id).method == "manual"
 
@@ -238,6 +251,9 @@ def test_matching_task_updates_job_lifecycle(session_factory, tmp_path, monkeypa
     playlist, _item = _seed_review_case(seed, tmp_path)
     job = Job(
         type="run_matching",
+        user_id=playlist.user_id,
+        scope=JobScope.user,
+        playlist_id=playlist.id,
         status=JobStatus.pending,
         payload=f'{{"playlist_id":{playlist.id}}}',
     )
@@ -248,7 +264,7 @@ def test_matching_task_updates_job_lifecycle(session_factory, tmp_path, monkeypa
     seed.close()
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
 
-    result = run_matching_task.run(job_id, playlist_id)
+    result = run_matching_task.run(job_id, playlist.user_id, playlist_id)
 
     check = session_factory()
     finished = check.get(Job, job_id)

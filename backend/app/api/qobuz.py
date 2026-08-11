@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth
+from app.auth import require_auth, require_csrf, require_owner_csrf
 from app.config import settings
 from app.db import get_db
-from app.models import Job, JobStatus, Playlist, utcnow
+from app.models import Job, JobScope, JobStatus, Playlist, User, utcnow
 from app.schemas import (
     JobOut,
     QobuzConnectOut,
@@ -34,8 +34,8 @@ from app.services.qobuz import (
 from app.workers.tasks import qobuz_download_task
 
 # ============================================================================
-# API интеграции Qobuz. Все endpoints закрыты require_auth (Bearer/cookie,
-# как и остальные роутеры сервиса).
+# API интеграции Qobuz. Все endpoints закрыты user-scoped Google session,
+# как и остальные пользовательские роутеры сервиса.
 #
 # Общие правила маппинга ошибок (ограничения RESTRICT, assessment sections 3/7:
 # API никогда не возвращает секреты/токены — в detail только нейтральные
@@ -141,14 +141,26 @@ def _payload_playlist_id(payload: str | None) -> int | None:
 
 
 @router.get("/download-status/{playlist_id}", response_model=JobOut | None)
-def qobuz_download_status(playlist_id: int, db: Session = Depends(get_db)):
+def qobuz_download_status(
+    playlist_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
     """Return persisted progress for the latest Qobuz run of a playlist."""
 
-    if db.get(Playlist, playlist_id) is None:
+    if db.scalar(
+        select(Playlist.id).where(
+            Playlist.id == playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    ) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     jobs = db.scalars(
         select(Job)
-        .where(Job.type == "qobuz_download")
+        .where(
+            Job.type == "qobuz_download",
+            Job.user_id == current_user.id,
+        )
         .order_by(Job.created_at.desc(), Job.id.desc())
     )
     return next(
@@ -161,15 +173,27 @@ def qobuz_download_status(playlist_id: int, db: Session = Depends(get_db)):
     "/download-eligibility/{playlist_id}",
     response_model=QobuzDownloadEligibilityOut,
 )
-def qobuz_eligibility(playlist_id: int, db: Session = Depends(get_db)):
-    playlist = db.get(Playlist, playlist_id)
+def qobuz_eligibility(
+    playlist_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    playlist = db.scalar(
+        select(Playlist).where(
+            Playlist.id == playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    )
     if playlist is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     return qobuz_download_eligibility(db, playlist)
 
 
 @router.post("/connect", response_model=QobuzConnectOut)
-def qobuz_connect(db: Session = Depends(get_db)):
+def qobuz_connect(
+    _: User = Depends(require_owner_csrf),
+    db: Session = Depends(get_db),
+):
     # «Подключить» = попытка создать клиента: это и есть проверка логина.
     # При успехе отдаём только label тарифа (например Studio) — он не секрет
     # и нужен фронтенду как подтверждение активной платной подписки
@@ -230,6 +254,7 @@ def qobuz_search(
 def _queue_qobuz_job(
     db: Session,
     *,
+    user_id: int,
     mode: str,
     playlist_id: int | None = None,
     url: str | None = None,
@@ -280,7 +305,13 @@ def _queue_qobuz_job(
         # уже идущее задание — клиент просто продолжает его polling.
         active_payload = json.loads(active_job.payload or "{}")
         requested_payload = {"mode": mode, "playlist_id": playlist_id, "url": url}
-        if all(active_payload.get(key) == value for key, value in requested_payload.items()):
+        if (
+            active_job.user_id == user_id
+            and all(
+                active_payload.get(key) == value
+                for key, value in requested_payload.items()
+            )
+        ):
             if stale_job_ids:
                 db.commit()
             return active_job
@@ -288,14 +319,14 @@ def _queue_qobuz_job(
             db.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "job_id": active_job.id,
-                "message": "Another Qobuz download is already running",
-            },
+            detail="Another Qobuz download is already running",
         )
 
     job = Job(
         type="qobuz_download",
+        playlist_id=playlist_id,
+        user_id=user_id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         heartbeat_at=utcnow(),
         payload=json.dumps(
@@ -333,13 +364,19 @@ def _queue_qobuz_job(
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def qobuz_download_url(payload: QobuzDownloadUrlIn, db: Session = Depends(get_db)):
+def qobuz_download_url(
+    payload: QobuzDownloadUrlIn,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
     # Скачивание по ссылке play.qobuz.com/... — ставит фоновое задание
     # (202). Поддерживаемые типы URL проверяет сервис внутри задания:
     # в MVP только album и track; playlist/artist/label завершат задание
     # ошибкой QobuzProviderError с понятным сообщением (ограничение MVP).
     _require_configured(db)
-    return _queue_qobuz_job(db, mode="url", url=payload.url.strip())
+    return _queue_qobuz_job(
+        db, user_id=current_user.id, mode="url", url=payload.url.strip()
+    )
 
 
 @router.post(
@@ -347,11 +384,25 @@ def qobuz_download_url(payload: QobuzDownloadUrlIn, db: Session = Depends(get_db
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def qobuz_fetch_missing(payload: QobuzFetchMissingIn, db: Session = Depends(get_db)):
+def qobuz_fetch_missing(
+    payload: QobuzFetchMissingIn,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
     # Докачка MISSING-треков плейлиста из каталога Qobuz. 404, если плейлиста
     # нет (проверяем до создания задания, чтобы не ставить обречённый job);
     # 503 — интеграция не настроена. Иначе 202 + активное задание.
     _require_configured(db)
-    if db.get(Playlist, payload.playlist_id) is None:
+    if db.scalar(
+        select(Playlist.id).where(
+            Playlist.id == payload.playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    ) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    return _queue_qobuz_job(db, mode="fetch_missing", playlist_id=payload.playlist_id)
+    return _queue_qobuz_job(
+        db,
+        user_id=current_user.id,
+        mode="fetch_missing",
+        playlist_id=payload.playlist_id,
+    )

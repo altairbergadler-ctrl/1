@@ -29,8 +29,10 @@ from app.models import (
 )
 from app.services.credentials import (
     CredentialError,
-    get_credential_payload,
-    save_credential,
+)
+from app.services.user_credentials import (
+    get_user_credential_payload,
+    save_user_credential,
 )
 
 SPOTIFY_SCOPES = (
@@ -187,12 +189,17 @@ class RedisOAuthStateStore:
         return f"{cls.key_prefix}:{digest}"
 
     def issue(self) -> str:
+        return self.issue_with_context("1")
+
+    def issue_with_context(self, context: str) -> str:
+        if not context or len(context) > 256:
+            raise SpotifyOAuthStateError("OAuth state context is invalid")
         for _ in range(3):
             state = secrets.token_urlsafe(32)
             try:
                 stored = self.redis.set(
                     self._key(state),
-                    "1",
+                    context,
                     ex=self.ttl_seconds,
                     nx=True,
                 )
@@ -205,10 +212,14 @@ class RedisOAuthStateStore:
         raise SpotifyOAuthStateError("Could not allocate a unique OAuth state")
 
     def consume(self, state: str) -> bool:
+        return self.consume_context(state) is not None
+
+    def consume_context(self, state: str) -> str | None:
         if not state:
             return False
         try:
-            return self.redis.getdel(self._key(state)) is not None
+            value = self.redis.getdel(self._key(state))
+            return str(value) if value is not None else None
         except RedisError as exc:
             raise SpotifyOAuthStateStorageError(
                 "OAuth state storage is unavailable"
@@ -247,17 +258,39 @@ def create_spotify_authorization(
     state_store: OAuthStateStore,
     *,
     oauth: SpotifyOAuthBackend | None = None,
+    context: str | None = None,
 ) -> SpotifyAuthorizationRequest:
     backend = oauth or create_spotify_oauth()
-    state = state_store.issue()
+    if context is None:
+        state = state_store.issue()
+    elif hasattr(state_store, "issue_with_context"):
+        state = state_store.issue_with_context(context)
+    else:
+        raise SpotifyOAuthStateStorageError("OAuth state binding is unavailable")
     return SpotifyAuthorizationRequest(
         url=backend.get_authorize_url(state=state),
         state=state,
     )
 
 
-def validate_spotify_state(state_store: OAuthStateStore, state: str) -> None:
-    if not state_store.consume(state):
+def validate_spotify_state(
+    state_store: OAuthStateStore,
+    state: str,
+    *,
+    expected_context: str | None = None,
+) -> None:
+    if not state or len(state) > 512:
+        raise SpotifyOAuthStateError("OAuth state is invalid, expired, or already used")
+    if expected_context is None:
+        valid = state_store.consume(state)
+    elif hasattr(state_store, "consume_context"):
+        valid = secrets.compare_digest(
+            state_store.consume_context(state) or "",
+            expected_context,
+        )
+    else:
+        valid = False
+    if not valid:
         raise SpotifyOAuthStateError("OAuth state is invalid, expired, or already used")
 
 
@@ -304,10 +337,15 @@ def exchange_spotify_code(
     state_store: OAuthStateStore,
     *,
     oauth: SpotifyOAuthBackend | None = None,
+    expected_context: str | None = None,
 ) -> SpotifyToken:
-    if not code:
+    if not code or len(code) > 4096:
         raise SpotifyTokenError("Spotify callback has no authorization code")
-    validate_spotify_state(state_store, state)
+    validate_spotify_state(
+        state_store,
+        state,
+        expected_context=expected_context,
+    )
     backend = oauth or create_spotify_oauth()
     try:
         response = backend.get_access_token(
@@ -348,37 +386,28 @@ def save_spotify_token(
     db: Session,
     token: SpotifyToken | Mapping[str, Any],
     *,
-    source: PlaylistSource | None = None,
+    source: PlaylistSource,
 ) -> PlaylistSource:
     parsed = token if isinstance(token, SpotifyToken) else _parse_token(token)
-    if source is None:
-        source = db.scalar(
-            select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
-        )
-    elif not _is_spotify_source(source):
+    if not _is_spotify_source(source) or source.user_id is None:
         raise SpotifyConfigurationError("Playlist source is not Spotify")
-
-    if source is None:
-        source = PlaylistSource(service=ServiceEnum.spotify)
-        db.add(source)
 
     previous_refresh = None
     try:
-        previous_refresh = get_credential_payload(db, "spotify").get("refresh_token")
+        previous_refresh = get_user_credential_payload(
+            db, source.user_id, "spotify"
+        ).get("refresh_token")
     except CredentialError:
-        # Transitional fallback used only while the one-time migration is
-        # moving an existing deployment away from PlaylistSource plaintext.
-        previous_refresh = source.refresh_token
-    save_credential(
+        previous_refresh = None
+    save_user_credential(
         db,
+        source.user_id,
         "spotify",
         {
             "access_token": parsed.access_token,
             "refresh_token": parsed.refresh_token or previous_refresh,
         },
     )
-    source.access_token = None
-    source.refresh_token = None
     source.expires_at = parsed.expires_at
     try:
         db.commit()
@@ -437,12 +466,9 @@ def _spotify_client_for_source(
     if not _is_spotify_source(source):
         raise SpotifyConfigurationError("Playlist source is not Spotify")
     try:
-        credential = get_credential_payload(db, "spotify")
+        credential = get_user_credential_payload(db, source.user_id, "spotify")
     except CredentialError:
-        credential = {
-            "access_token": source.access_token,
-            "refresh_token": source.refresh_token,
-        }
+        raise SpotifyTokenError("Spotify source has no credential")
     if source.expires_at is not None and source.expires_at <= utcnow() + timedelta(
         seconds=30
     ):
@@ -450,7 +476,7 @@ def _spotify_client_for_source(
             str(credential.get("refresh_token") or ""), oauth=oauth
         )
         source = save_spotify_token(db, refreshed, source=source)
-        credential = get_credential_payload(db, "spotify")
+        credential = get_user_credential_payload(db, source.user_id, "spotify")
     access_token = str(credential.get("access_token") or "").strip()
     if not access_token:
         raise SpotifyTokenError("Spotify source has no access token")
@@ -640,6 +666,7 @@ def _upsert_playlist(
     if playlist is None:
         playlist = Playlist(
             source_id=source.id,
+            user_id=source.user_id,
             external_id=remote.external_id,
             name=remote.name,
         )
@@ -709,6 +736,7 @@ def import_spotify_playlists(
 def import_spotify_playlist_url(
     db: Session,
     url: str,
+    source: PlaylistSource,
     client: SpotifyApiClient | None = None,
     *,
     normalizer: Callable[[str], str] | None = None,
@@ -716,10 +744,7 @@ def import_spotify_playlist_url(
     """Import exactly one playlist through the connected Spotify account."""
 
     playlist_id = spotify_playlist_id_from_url(url)
-    source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
-    )
-    if source is None:
+    if source.id is None or not _is_spotify_source(source):
         raise SpotifyTokenError("Connect Spotify before importing a playlist")
     api = client or _spotify_client_for_source(db, source)
     try:

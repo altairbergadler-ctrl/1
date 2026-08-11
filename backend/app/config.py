@@ -13,9 +13,25 @@ class Settings(BaseSettings):
     redis_url: str
     music_library_path: str
     app_auth_token: str = Field(min_length=16)
+    release_sha: str = Field(
+        default="dev", pattern="^(?:[0-9a-f]{40}|dev|bootstrap)$"
+    )
     timezone: str = Field(default="UTC", validation_alias="TZ")
+    public_origin: str = "http://127.0.0.1:8080"
+    auth_key_file: str = "/run/secrets/auth_key"
     auth_cookie_max_age_seconds: int = Field(default=30 * 24 * 60 * 60, ge=300)
+    auth_session_idle_seconds: int = Field(default=7 * 24 * 60 * 60, ge=300)
+    auth_session_touch_interval_seconds: int = Field(default=5 * 60, ge=30)
+    auth_recovery_max_age_seconds: int = Field(default=15 * 60, ge=60, le=3600)
+    auth_recovery_idle_seconds: int = Field(default=5 * 60, ge=60, le=1800)
     auth_cookie_secure: bool = False
+
+    google_login_client_id: str = ""
+    google_login_client_secret_file: str = "/run/secrets/google_login_client_secret"
+    google_login_redirect_uri: str = "https://audiofeel.su/api/auth/google/callback"
+    google_login_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=3600)
+    google_login_clock_skew_seconds: int = Field(default=60, ge=0, le=300)
+    google_login_max_token_age_seconds: int = Field(default=10 * 60, ge=60, le=3600)
 
     spotify_client_id: str = ""
     spotify_client_secret: str = ""

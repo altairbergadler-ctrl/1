@@ -34,7 +34,7 @@ services:
       QOBUZ_PASSWORD: ""
       YANDEX_TOKEN: ""
       PROVIDER_CREDENTIAL_KEY_FILE: /run/secrets/provider_credential_key
-    command: sh -lc "alembic upgrade head && python -m app.commands.migrate_credentials"
+    command: python -m app.commands.migrate_database
     secrets:
       - provider_credential_key
     volumes:
@@ -48,6 +48,7 @@ services:
     env_file: ${MUSIC_SERVICE_ENV_FILE:-.env}
     environment:
       APP_AUTH_TOKEN: ${APP_AUTH_TOKEN}
+      RELEASE_SHA: ${RELEASE_SHA:-dev}
       QOBUZ_ENABLED: ${QOBUZ_ENABLED:-false}
       QOBUZ_AUTH_TOKEN: ""
       QOBUZ_USER_ID: ""
@@ -61,9 +62,13 @@ services:
       YANDEX_INTERNAL_TOKEN: ${YANDEX_INTERNAL_TOKEN:-${QOBUZ_INTERNAL_TOKEN:-}}
       PROVIDER_CREDENTIAL_KEY_FILE: /run/secrets/provider_credential_key
       QOBUZ_CREDENTIAL_KEY_FILE: /run/secrets/qobuz_credential_key
+      AUTH_KEY_FILE: /run/secrets/auth_key
+      GOOGLE_LOGIN_CLIENT_SECRET_FILE: /run/secrets/google_login_client_secret
     secrets:
       - provider_credential_key
       - qobuz_credential_key
+      - auth_key
+      - google_login_client_secret
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --no-access-log
     volumes:
       - ./backend:/code
@@ -253,6 +258,10 @@ secrets:
     file: ${PROVIDER_CREDENTIAL_KEY_HOST_FILE:-./data/secrets/provider-credentials.key}
   qobuz_credential_key:
     file: ${QOBUZ_CREDENTIAL_KEY_HOST_FILE:-./data/secrets/qobuz-credentials.key}
+  auth_key:
+    file: ${AUTH_KEY_HOST_FILE:-./data/secrets/auth.key}
+  google_login_client_secret:
+    file: ${GOOGLE_LOGIN_CLIENT_SECRET_HOST_FILE:-./data/secrets/google-login-client-secret}
 
 networks:
   qobuz_control:

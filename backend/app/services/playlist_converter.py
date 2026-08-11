@@ -301,6 +301,7 @@ def convert_playlist_content(
 def save_converted_playlist(
     db: Session,
     *,
+    user_id: int,
     name: str,
     content: str,
     converted: ConvertedPlaylist,
@@ -309,14 +310,18 @@ def save_converted_playlist(
     if not clean_name:
         raise PlaylistConversionError("Playlist name is invalid")
     source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.manual)
+        select(PlaylistSource).where(
+            PlaylistSource.user_id == user_id,
+            PlaylistSource.service == ServiceEnum.manual,
+        )
     )
     if source is None:
-        source = PlaylistSource(service=ServiceEnum.manual)
+        source = PlaylistSource(user_id=user_id, service=ServiceEnum.manual)
         db.add(source)
         db.flush()
     playlist = Playlist(
         source=source,
+        user_id=user_id,
         external_id=f"manual:{uuid.uuid4().hex}",
         name=clean_name,
         snapshot_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),

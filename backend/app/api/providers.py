@@ -9,10 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth, require_same_origin
+from app.auth import require_owner, require_owner_csrf
 from app.config import settings
 from app.db import get_db
-from app.models import Job, JobStatus, PlaylistSource, ProviderHealth, ServiceEnum, utcnow
+from app.models import Job, JobScope, JobStatus, ProviderHealth, utcnow
 from app.schemas import (
     JobOut,
     ProviderCredentialOut,
@@ -42,7 +42,7 @@ from app.services.qobuz import (
 from app.services.yandex import create_yandex_client
 from app.workers.tasks import provider_health_check_task
 
-router = APIRouter(dependencies=[Depends(require_auth)])
+router = APIRouter(dependencies=[Depends(require_owner)])
 _ROTATION_LOCK_NAMESPACE = 2026081001
 
 
@@ -104,7 +104,7 @@ def provider_health_one(
 @router.put(
     "/qobuz/credentials",
     response_model=ProviderCredentialOut,
-    dependencies=[Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def rotate_qobuz_credential(
     payload: QobuzCredentialIn,
@@ -164,7 +164,7 @@ def rotate_qobuz_credential(
 @router.put(
     "/yandex/credentials",
     response_model=ProviderCredentialOut,
-    dependencies=[Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def rotate_yandex_credential(
     payload: YandexCredentialIn,
@@ -199,14 +199,6 @@ def rotate_yandex_credential(
     except CredentialError as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="Credential storage is unavailable") from exc
-    source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
-    )
-    if source is None:
-        source = PlaylistSource(service=ServiceEnum.yandex)
-        db.add(source)
-    source.access_token = None
-    source.refresh_token = None
     record_rotation_success(
         db,
         "yandex",
@@ -222,7 +214,7 @@ def rotate_yandex_credential(
     "/{provider}/health-check",
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def run_provider_health(
     provider: str,
@@ -244,6 +236,8 @@ def run_provider_health(
         raise HTTPException(status_code=429, detail="Health check cooldown is active")
     job = Job(
         type="provider_health_check",
+        scope=JobScope.system,
+        user_id=None,
         status=JobStatus.pending,
         payload=json.dumps({"provider": provider}, separators=(",", ":")),
         heartbeat_at=utcnow(),

@@ -1,8 +1,10 @@
 # Music Service MVP: handoff для новых чатов
 
-Актуально на: 2026-08-11
-Статус: MVP acceptance завершён; Release 2 не начат.
-Опорная версия: `v0.1.0` (создаётся после итогового коммита handoff).
+Актуально на: 2026-08-12
+Статус: Google Sign-In/multi-user реализованы и прошли локальный security gate;
+production Google/двухаккаунтная приёмка выполняется отдельно по runbook.
+Предыдущая production-опора до этой миграции:
+`22ea6ee592d9e8f314129fadf79ce276ed57f603`.
 
 ## 1. Назначение документа
 
@@ -11,7 +13,12 @@
 
 1. `README.md`;
 2. `docs/music-service-logic.md`;
-3. `docs/music-service-mvp-plan.md`.
+3. `docs/music-service-mvp-plan.md`;
+4. `docs/google-user-auth.md`;
+5. `docs/playlist-import.md`;
+6. `docs/google-drive-storage.md`;
+7. `docs/provider-health-credential-rotation.md`;
+8. `docs/vps-deployment.md`.
 
 Никакие секреты в Git не хранятся. Не выводить в логи и чат значения
 `.env`, OAuth codes, provider tokens, passwords и session cookies.
@@ -19,7 +26,8 @@
 ## 2. Что реализовано
 
 - Docker Compose: PostgreSQL, Redis, FastAPI, Celery, Nginx/PWA.
-- Alembic: `0007_manual_playlist_source (head)`.
+- Alembic: `0009_google_user_auth_contract (head)`; Compose выполняет
+  expand/backfill/contract через `app.commands.migrate_database`.
 - Read-only монтирование реальной библиотеки через
   `MUSIC_LIBRARY_HOST_PATH`; локально используется `X:/Music`.
 - Сканер lossless-файлов с тегами, SHA-1, идемпотентностью,
@@ -31,8 +39,18 @@
 - Яндекс «Мне нравится» импортируется как стабильный плейлист.
 - Каскад matching: ISRC, exact, fuzzy, manual review, MISSING.
 - Bit-perfect delivery: HTTP Range, одиночный файл, ZIP_STORED, M3U8.
-- PWA с HttpOnly-cookie; для Tailscale HTTPS локально включен
-  `AUTH_COOKIE_SECURE=true`.
+- Invitation-only Google Sign-In с PKCE/state/nonce/JWKS validation и
+  стабильным `google_sub`; публичной регистрации нет.
+- Hashed server sessions в HttpOnly/Secure/SameSite cookie, idle/absolute TTL,
+  server-side logout/revocation и полноценный CSRF.
+- Обязательный `user_id` у sources/playlists/user jobs, cross-user `404` и
+  download grant только через собственный READY item; `File`/SHA-1/Drive
+  locations остаются общими.
+- User-scoped Spotify/Yandex playlist vault и отдельные system Qobuz/Yandex +
+  infrastructure Drive vaults.
+- PWA с Google login/logout и owner-разделом invitations/disable/revoke;
+  session/CSRF tokens не сохраняются в Web Storage.
+- `APP_AUTH_TOKEN` изолирован в `/#/recovery` и не принимается обычным API.
 - Приватный внешний доступ через Tailscale Serve HTTPS. Funnel не включён.
 - Provider Health & Credential Rotation: раздельные account/API/sidecar/worker
   states, encrypted vault, проверка до активации, hot rotation и Celery beat.
@@ -57,6 +75,10 @@
 | Yandex liked playlist | 72 tracks |
 | Matching | 1 READY, 71 MISSING, 0 NEEDS_REVIEW |
 | Acceptance track | `Slayyyter — DANCE...`: exact, confidence `0.9799`, READY |
+| Range | `206`, bytes `0-1023/36684928` |
+| M3U8 | `200`, acceptance track present |
+| Playlist ZIP | `200`, 2 entries, all ZIP_STORED, FLAC SHA-1 equals source |
+| Physical smartphone | PWA/login/download over Tailscale HTTPS and mobile network confirmed by user |
 
 Отдельная приёмка playlist-link/converter 2026-08-11: `249 passed, 5 skipped`,
 JavaScript/Python syntax clean, Alembic PostgreSQL current = heads =
@@ -66,15 +88,28 @@ JavaScript/Python syntax clean, Alembic PostgreSQL current = heads =
 `docs/provider-health-credential-rotation.md`: backend `212 passed, 5 skipped`,
 Qobuz sidecar `9 tests`, Alembic `0005`, Celery `pong`, live Yandex health и
 hot rotation без restart.
-| Range | `206`, bytes `0-1023/36684928` |
-| M3U8 | `200`, acceptance track present |
-| Playlist ZIP | `200`, 2 entries, all ZIP_STORED, FLAC SHA-1 equals source |
-| Physical smartphone | PWA/login/download over Tailscale HTTPS and mobile network confirmed by user |
+
+### 3.1 Google Sign-In / multi-user gate 2026-08-12
+
+- полный Docker pytest с live-PWA: `292 passed`;
+- live-PWA contract на собранном Nginx image: `9 passed`;
+- отдельные OIDC/JWKS/state/PKCE/invitation/session/CSRF/IDOR тесты: проходят;
+- JavaScript syntax и PWA static contract: проходят;
+- реальный PostgreSQL migration test: `0007 → 0008 → backfill → 0009`,
+  повторный запуск `already_current`, downgrade `0009 → 0007`;
+- при migration/downgrade сохранены исходные source/playlist/item/job IDs,
+  `File.sha1` и Drive location; pristine bootstrap user удалён при rollback;
+- global Spotify envelope восстановлена после rollback, а на head находится
+  только в user vault и migration backup.
+
+Фактическая production-приёмка и финальный Git/deployed SHA дописываются сюда
+только после backup restore-test и реального входа двумя Google accounts.
 
 Команда полного локального теста с live-PWA:
 
 ```powershell
 docker compose run --rm `
+  -v "${PWD}/frontend:/frontend:ro" `
   -e DATABASE_URL=sqlite+pysqlite:///:memory: `
   -e REDIS_URL=redis://redis:6379/15 `
   -e MUSIC_LIBRARY_PATH=/tmp/music `
@@ -136,6 +171,9 @@ docker compose exec -T worker celery -A app.workers.celery_app.celery inspect pi
 `.env` должен оставаться ignored. Важные ключи без значений:
 
 - `APP_AUTH_TOKEN`;
+- `PUBLIC_ORIGIN`, `AUTH_KEY_HOST_FILE`, `AUTH_COOKIE_SECURE` и session TTL;
+- `GOOGLE_LOGIN_CLIENT_ID`, `GOOGLE_LOGIN_CLIENT_SECRET_HOST_FILE`,
+  `GOOGLE_LOGIN_REDIRECT_URI`;
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`;
 - `PROVIDER_CREDENTIAL_KEY_HOST_FILE`, `QOBUZ_CREDENTIAL_KEY_HOST_FILE`;
 - `YANDEX_DOWNLOAD_ENABLED`, `YANDEX_SIGNER_URL`, `YANDEX_INTERNAL_TOKEN`,
@@ -146,7 +184,6 @@ docker compose exec -T worker celery -A app.workers.celery_app.celery inspect pi
 - `QOBUZ_ENABLED`, `QOBUZ_INTERNAL_TOKEN` (опционально, см. раздел «Qobuz» в README и
   `docs/qobuz-dl-assessment.md`);
 - `MUSIC_LIBRARY_HOST_PATH`, `QOBUZ_STAGING_HOST_PATH`;
-- `AUTH_COOKIE_SECURE`;
 - PostgreSQL/Redis settings.
 
 ## 6. Следующие итерации
@@ -230,7 +267,9 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 
 > Продолжи работу в репозитории Music Service. Сначала прочитай
 > `docs/music-service-handoff.md`, `docs/music-service-mvp-plan.md`,
-> `docs/music-service-logic.md` и `README.md`; проверь `git status`, тег `v0.1.0`
-> и Docker. MVP acceptance завершён. Не начинай Release 2 без моего
+> `docs/music-service-logic.md`, `docs/google-user-auth.md` и `README.md`;
+> проверь `git status`, локальный/remote/deployed SHA, Alembic и Docker.
+> Google Sign-In использует invitation-only stable `sub`, а Drive OAuth —
+> отдельный client. Не начинай Release 2 без моего
 > явного указания. Текущий следующий scope бери только из раздела 6
 > handoff-документа и после моего выбора.

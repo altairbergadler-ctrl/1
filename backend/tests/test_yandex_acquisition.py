@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.models import (
     Job,
+    JobScope,
     JobStatus,
     Match,
     MatchStatus,
@@ -22,6 +23,7 @@ from app.models import (
     ServiceEnum,
 )
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
+from app.services.credentials import save_credential
 from app.services.qobuz import provider_lookup_key
 from app.services.yandex_acquisition import (
     _candidate,
@@ -36,6 +38,7 @@ from app.services.yandex_acquisition import (
     yandex_download_eligibility,
 )
 from app.workers.tasks import yandex_download_task
+from tests.helpers import ensure_user
 
 
 def _track(track_id: str, title: str = "First Track"):
@@ -67,8 +70,14 @@ class FakeYandexDownloadClient:
 
 
 def _missing_playlist(db, *, service=ServiceEnum.spotify, count=1):
-    source = PlaylistSource(service=service, access_token="test-token")
-    playlist = Playlist(source=source, external_id=f"p-{service.value}", name="Playlist")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=service)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id=f"p-{service.value}",
+        name="Playlist",
+    )
     db.add_all([source, playlist])
     db.flush()
     items = []
@@ -102,7 +111,7 @@ def test_status_exposes_flac_only_without_exposing_secret(
 ):
     monkeypatch.setattr("app.config.settings.yandex_download_enabled", True)
     monkeypatch.setattr("app.api.yandex_download.YANDEX_LOSSLESS_AVAILABLE", True)
-    db.add(PlaylistSource(service=ServiceEnum.yandex, access_token="do-not-return"))
+    save_credential(db, "yandex", {"token": "do-not-return"})
     db.commit()
 
     response = api_client.get("/api/yandex-download/status", headers=auth_headers)
@@ -125,7 +134,7 @@ def test_status_stays_disabled_without_internal_signer_token(
 ):
     monkeypatch.setattr("app.config.settings.yandex_download_enabled", True)
     monkeypatch.setattr("app.config.settings.yandex_internal_token", "")
-    db.add(PlaylistSource(service=ServiceEnum.yandex, access_token="test-token"))
+    save_credential(db, "yandex", {"token": "test-token"})
     db.commit()
 
     response = api_client.get("/api/yandex-download/status", headers=auth_headers)
@@ -237,8 +246,11 @@ def test_fetch_endpoint_rejects_provider_without_lossless_support(
 ):
     monkeypatch.setattr("app.config.settings.yandex_download_enabled", True)
     monkeypatch.setattr("app.api.yandex_download.YANDEX_LOSSLESS_AVAILABLE", False)
-    source = PlaylistSource(service=ServiceEnum.yandex, access_token="test-token")
-    playlist = Playlist(source=source, external_id="ym", name="Yandex")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.yandex)
+    playlist = Playlist(
+        source=source, user_id=user.id, external_id="ym", name="Yandex"
+    )
     db.add_all([source, playlist])
     db.commit()
     queued = []
@@ -672,11 +684,14 @@ def test_yandex_download_task_imports_scans_and_matches(
     monkeypatch.setattr("app.config.settings.musicbrainz_enabled", False)
 
     session = session_factory()
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="test-source")
-    yandex_source = PlaylistSource(
-        service=ServiceEnum.yandex, access_token="test-yandex"
+    user = ensure_user(session)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id="ym-task",
+        name="Task Playlist",
     )
-    playlist = Playlist(source=source, external_id="ym-task", name="Task Playlist")
     item = PlaylistItem(
         playlist=playlist,
         position=0,
@@ -689,7 +704,7 @@ def test_yandex_download_task_imports_scans_and_matches(
         duration_ms=1000,
         isrc="USAAA2400001",
     )
-    session.add_all([source, yandex_source, playlist, item])
+    session.add_all([source, playlist, item])
     session.flush()
     session.add(
         Match(
@@ -701,6 +716,9 @@ def test_yandex_download_task_imports_scans_and_matches(
     )
     job = Job(
         type="yandex_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps({"playlist_id": playlist.id}),
     )

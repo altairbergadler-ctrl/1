@@ -10,10 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models import Playlist, PlaylistItem, PlaylistSource, ServiceEnum
-from app.services.credentials import CredentialError, get_credential_payload
+from app.services.credentials import CredentialError
 from app.services.normalize import normalize_playlist_item
+from app.services.user_credentials import get_user_credential_payload
 
 YANDEX_TRACK_BATCH_SIZE = 50
 
@@ -254,7 +254,12 @@ def _save_remote_playlist(
 
     action: Literal["imported", "updated"]
     if existing is None:
-        existing = Playlist(source_id=source.id, external_id=external_id, name=name)
+        existing = Playlist(
+            source_id=source.id,
+            user_id=source.user_id,
+            external_id=external_id,
+            name=name,
+        )
         db.add(existing)
         action = "imported"
     else:
@@ -520,12 +525,12 @@ def _validate_source(source: PlaylistSource) -> None:
 
 
 def _source_token(db: Session, source: PlaylistSource) -> str:
+    if source.user_id is None:
+        raise YandexConfigurationError("Yandex source has no owner")
     try:
-        token = get_credential_payload(db, "yandex").get("token")
-    except CredentialError:
-        # Transitional only: the migration command clears these fields before
-        # the updated worker starts.
-        token = source.access_token or settings.yandex_token
+        token = get_user_credential_payload(db, source.user_id, "yandex").get("token")
+    except CredentialError as exc:
+        raise YandexConfigurationError("Yandex source is not connected") from exc
     if not token or not token.strip():
-        raise YandexConfigurationError("YANDEX_TOKEN is not configured")
+        raise YandexConfigurationError("Yandex source is not connected")
     return str(token)

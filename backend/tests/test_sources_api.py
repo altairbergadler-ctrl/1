@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import PlaylistSource, ServiceEnum, utcnow
-from app.services.credentials import get_credential_payload
+from app.services.user_credentials import get_user_credential_payload
 from app.services.spotify import (
     SpotifyAuthorizationRequest,
     SpotifyOAuthStateError,
@@ -12,6 +12,7 @@ from app.services.spotify import (
     SpotifyProviderError,
     SpotifyToken,
 )
+from app.services.yandex import YandexConfigurationError
 
 
 def test_spotify_connect_redirects_with_issued_state(
@@ -23,7 +24,7 @@ def test_spotify_connect_redirects_with_issued_state(
     )
     monkeypatch.setattr(
         "app.api.sources.create_spotify_authorization",
-        lambda store: SpotifyAuthorizationRequest(
+        lambda store, **_kwargs: SpotifyAuthorizationRequest(
             url="https://accounts.spotify.test/authorize?state=issued-state",
             state="issued-state",
         )
@@ -31,18 +32,17 @@ def test_spotify_connect_redirects_with_issued_state(
         else None,
     )
 
-    response = api_client.get(
+    response = api_client.post(
         "/api/sources/spotify/connect",
         headers=auth_headers,
-        follow_redirects=False,
     )
 
-    assert response.status_code == 302
-    assert response.headers["location"].endswith("state=issued-state")
+    assert response.status_code == 200
+    assert response.json()["authorization_url"].endswith("state=issued-state")
 
 
 def test_spotify_callback_upserts_one_source_without_exposing_tokens(
-    api_client, db, monkeypatch
+    api_client, auth_headers, owner_user, db, monkeypatch
 ):
     monkeypatch.setattr(
         "app.api.sources.create_spotify_state_store", lambda **_kwargs: object()
@@ -69,11 +69,13 @@ def test_spotify_callback_upserts_one_source_without_exposing_tokens(
     first = api_client.get(
         "/api/sources/spotify/callback",
         params={"code": "first-code", "state": "first-state"},
+        headers=auth_headers,
         follow_redirects=False,
     )
     second = api_client.get(
         "/api/sources/spotify/callback",
         params={"code": "second-code", "state": "second-state"},
+        headers=auth_headers,
         follow_redirects=False,
     )
 
@@ -92,15 +94,14 @@ def test_spotify_callback_upserts_one_source_without_exposing_tokens(
     source = db.scalar(
         select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
     )
-    assert source.access_token is None
-    assert source.refresh_token is None
-    assert get_credential_payload(db, "spotify") == {
+    assert source.user_id == owner_user.id
+    assert get_user_credential_payload(db, owner_user.id, "spotify") == {
         "access_token": "second-access",
         "refresh_token": "refresh-token",
     }
 
 
-def test_spotify_callback_rejects_invalid_state(api_client, monkeypatch):
+def test_spotify_callback_rejects_invalid_state(api_client, auth_headers, monkeypatch):
     monkeypatch.setattr(
         "app.api.sources.create_spotify_state_store", lambda **_kwargs: object()
     )
@@ -114,6 +115,7 @@ def test_spotify_callback_rejects_invalid_state(api_client, monkeypatch):
     response = api_client.get(
         "/api/sources/spotify/callback",
         params={"code": "code", "state": "invalid-state"},
+        headers=auth_headers,
     )
 
     assert response.status_code == 400
@@ -128,7 +130,7 @@ def test_spotify_callback_rejects_invalid_state(api_client, monkeypatch):
     ],
 )
 def test_spotify_callback_maps_provider_outages_safely(
-    api_client, monkeypatch, exception, expected_status
+    api_client, auth_headers, monkeypatch, exception, expected_status
 ):
     monkeypatch.setattr(
         "app.api.sources.create_spotify_state_store", lambda **_kwargs: object()
@@ -141,6 +143,7 @@ def test_spotify_callback_maps_provider_outages_safely(
     response = api_client.get(
         "/api/sources/spotify/callback",
         params={"code": "code", "state": "state"},
+        headers=auth_headers,
     )
 
     assert response.status_code == expected_status
@@ -148,9 +151,8 @@ def test_spotify_callback_maps_provider_outages_safely(
 
 
 def test_yandex_connect_and_source_list_hide_token(
-    api_client, auth_headers, db, monkeypatch
+    api_client, auth_headers, owner_user, db, monkeypatch
 ):
-    monkeypatch.setattr("app.api.sources.settings.yandex_token", "yandex-test-token")
     monkeypatch.setattr(
         "app.api.sources.create_yandex_client",
         lambda token: {"token_valid": bool(token)},
@@ -159,6 +161,7 @@ def test_yandex_connect_and_source_list_hide_token(
     connected = api_client.post(
         "/api/sources/yandex/connect",
         headers=auth_headers,
+        json={"token": "yandex-test-token"},
     )
     listing = api_client.get("/api/sources", headers=auth_headers)
 
@@ -170,32 +173,34 @@ def test_yandex_connect_and_source_list_hide_token(
     source = db.scalar(
         select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
     )
-    assert source.access_token is None
-    assert get_credential_payload(db, "yandex") == {"token": "yandex-test-token"}
+    assert source.user_id == owner_user.id
+    assert get_user_credential_payload(db, owner_user.id, "yandex") == {
+        "token": "yandex-test-token"
+    }
 
 
-def test_yandex_connect_reads_token_only_from_settings(
+def test_yandex_connect_rejects_invalid_user_token(
     api_client, auth_headers, monkeypatch
 ):
-    monkeypatch.setattr("app.api.sources.settings.yandex_token", "")
     monkeypatch.setattr(
         "app.api.sources.create_yandex_client",
-        lambda _token: (_ for _ in ()).throw(AssertionError("must not run")),
+        lambda _token: (_ for _ in ()).throw(YandexConfigurationError("invalid")),
     )
 
     response = api_client.post(
         "/api/sources/yandex/connect",
         headers=auth_headers,
+        json={"token": "invalid-token-value"},
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "YANDEX_TOKEN is not configured"
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Yandex Music token is invalid"
 
 
 def test_source_management_requires_auth(api_client):
     assert api_client.get("/api/sources").status_code == 401
     assert (
-        api_client.get(
+        api_client.post(
             "/api/sources/spotify/connect", follow_redirects=False
         ).status_code
         == 401

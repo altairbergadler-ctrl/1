@@ -207,21 +207,15 @@ def create_yandex_acquisition_client(db: Session):
         raise YandexAcquisitionConfigurationError(
             "Yandex lossless signer is not configured"
         )
-    source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
-    )
-    if source is None:
-        raise YandexAcquisitionConfigurationError("Yandex source is not connected")
     try:
-        try:
-            token = get_credential_payload(db, "yandex").get("token")
-        except CredentialError:
-            token = source.access_token
+        token = get_credential_payload(db, "yandex").get("token")
         if not str(token or "").strip():
-            raise YandexAcquisitionConfigurationError(
-                "Yandex source is not connected"
-            )
+            raise YandexAcquisitionConfigurationError("Yandex acquisition is not configured")
         return create_yandex_client(str(token))
+    except CredentialError as exc:
+        raise YandexAcquisitionConfigurationError(
+            "Yandex acquisition is not configured"
+        ) from exc
     except Exception as exc:
         if isinstance(exc, YandexAcquisitionConfigurationError):
             raise

@@ -88,13 +88,18 @@ ISRC, duration и Spotify track ID сохраняются, когда они к�
 Конвертированные списки используют `playlist_sources.service = manual`.
 Каждый импорт создаёт новый плейлист и сохраняет порядок и дубликаты. Для
 ручного источника provider refresh запрещён: обновлённый файл импортируется как
-новый список. Миграция: `0007_manual_playlist_source`.
+новый список. Source, playlist, matching-job и все items принадлежат
+аутентифицированному `user_id`; чужой ID возвращает `404`. Значение `manual`
+добавлено в `0007_manual_playlist_source`, обязательное владение закреплено в
+`0009_google_user_auth_contract`.
 
 ## Spotify OAuth
 
 OAuth остаётся удобным необязательным путём. Пользователь нажимает `Войти через
 Spotify`, вводит пароль только на стороне Spotify и возвращается на
 `/#/playlists`. Client ID и Client Secret находятся только на сервере.
+Начало OAuth выполняется state-changing `POST` с CSRF; Redis state одноразовый
+и привязан к текущим `user_id` и server session ID.
 
 После подключения `POST /api/playlists/import-url` принимает строгую ссылку
 `https://open.spotify.com/playlist/{id}`. Backend извлекает только ID, читает
@@ -108,13 +113,15 @@ URL не запрашиваются.
 ## Безопасность и границы
 
 - пароль Spotify никогда не проходит через Music Service;
-- access/refresh tokens хранятся в существующем AES-256-GCM credential vault;
+- access/refresh tokens хранятся в AES-256-GCM `user_provider_credentials`
+  отдельно для каждого `user_id`; OAuth одного пользователя не заменяет token
+  другого;
 - PWA не сохраняет содержимое импорта в localStorage/sessionStorage;
 - backend не загружает URL, указанные внутри CSV/M3U;
 - содержимое используется только как метаданные для matching;
 - импорт не скачивает аудио из Spotify и не меняет bit-perfect delivery;
-- текущая схема playlists всё ещё общая: user-scoped ownership относится к
-  отдельной многопользовательской итерации.
+- физический каталог и `File.sha1` общие, но source/playlist/job/review/download
+  grants всегда user-scoped по модели `shared bytes, private rights`.
 
 ## Проверка
 
@@ -128,4 +135,6 @@ URL не запрашиваются.
 - немедленную постановку matching-job;
 - запрет provider refresh для ручного источника;
 - OAuth callback и возврат в PWA;
+- два пользователя с независимыми Spotify credentials и IDOR-негативные
+  сценарии;
 - отсутствие provider credentials в ответах API.

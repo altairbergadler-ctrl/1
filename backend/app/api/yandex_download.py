@@ -5,15 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth
+from app.auth import require_auth, require_csrf
 from app.config import settings
 from app.db import get_db
 from app.models import (
     Job,
+    JobScope,
     JobStatus,
     Playlist,
-    PlaylistSource,
-    ServiceEnum,
+    User,
     utcnow,
 )
 from app.schemas import (
@@ -33,22 +33,12 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 _YANDEX_QUEUE_LOCK_ID = 2026081006
 
 
-def _source_configured(db: Session) -> bool:
-    source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.yandex)
-    )
-    return bool(
-        source is not None
-        and (has_credential(db, "yandex") or str(source.access_token or "").strip())
-    )
-
-
 def _signer_configured() -> bool:
     return len(settings.yandex_internal_token.strip()) >= 16
 
 
 def _configured(db: Session) -> bool:
-    return _source_configured(db) and _signer_configured()
+    return has_credential(db, "yandex") and _signer_configured()
 
 
 def _require_configured(db: Session) -> None:
@@ -93,12 +83,24 @@ def _payload_playlist_id(payload: str | None) -> int | None:
 
 
 @router.get("/download-status/{playlist_id}", response_model=JobOut | None)
-def yandex_download_status(playlist_id: int, db: Session = Depends(get_db)):
-    if db.get(Playlist, playlist_id) is None:
+def yandex_download_status(
+    playlist_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    if db.scalar(
+        select(Playlist.id).where(
+            Playlist.id == playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    ) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     jobs = db.scalars(
         select(Job)
-        .where(Job.type == "yandex_download")
+        .where(
+            Job.type == "yandex_download",
+            Job.user_id == current_user.id,
+        )
         .order_by(Job.created_at.desc(), Job.id.desc())
     )
     return next(
@@ -111,14 +113,23 @@ def yandex_download_status(playlist_id: int, db: Session = Depends(get_db)):
     "/download-eligibility/{playlist_id}",
     response_model=YandexDownloadEligibilityOut,
 )
-def yandex_eligibility(playlist_id: int, db: Session = Depends(get_db)):
-    playlist = db.get(Playlist, playlist_id)
+def yandex_eligibility(
+    playlist_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    playlist = db.scalar(
+        select(Playlist).where(
+            Playlist.id == playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    )
     if playlist is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
     return yandex_download_eligibility(db, playlist)
 
 
-def _queue_yandex_job(db: Session, playlist_id: int) -> Job:
+def _queue_yandex_job(db: Session, user_id: int, playlist_id: int) -> Job:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(
             text("SELECT pg_advisory_xact_lock(:lock_id)"),
@@ -152,7 +163,10 @@ def _queue_yandex_job(db: Session, playlist_id: int) -> Job:
         .order_by(Job.created_at.desc())
     )
     if active_job is not None:
-        if _payload_playlist_id(active_job.payload) == playlist_id:
+        if (
+            active_job.user_id == user_id
+            and _payload_playlist_id(active_job.payload) == playlist_id
+        ):
             if stale_job_ids:
                 db.commit()
             return active_job
@@ -160,14 +174,14 @@ def _queue_yandex_job(db: Session, playlist_id: int) -> Job:
             db.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "job_id": active_job.id,
-                "message": "Another Yandex download is already running",
-            },
+            detail="Another Yandex download is already running",
         )
 
     job = Job(
         type="yandex_download",
+        playlist_id=playlist_id,
+        user_id=user_id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         heartbeat_at=utcnow(),
         payload=json.dumps(
@@ -202,9 +216,15 @@ def _queue_yandex_job(db: Session, playlist_id: int) -> Job:
 )
 def yandex_fetch_missing(
     payload: YandexFetchMissingIn,
+    current_user: User = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
     _require_configured(db)
-    if db.get(Playlist, payload.playlist_id) is None:
+    if db.scalar(
+        select(Playlist.id).where(
+            Playlist.id == payload.playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    ) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    return _queue_yandex_job(db, payload.playlist_id)
+    return _queue_yandex_job(db, current_user.id, payload.playlist_id)

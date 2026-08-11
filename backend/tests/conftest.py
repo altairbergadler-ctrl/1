@@ -17,6 +17,8 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/15"
 os.environ["MUSIC_LIBRARY_PATH"] = "./test-music"
 os.environ["APP_AUTH_TOKEN"] = "test-auth-token-12345"
 os.environ["AUTH_COOKIE_SECURE"] = "false"
+os.environ["PUBLIC_ORIGIN"] = "http://testserver"
+os.environ["AUTH_KEY_FILE"] = str(TEST_FIXTURES / "auth.test.key")
 os.environ["MUSICBRAINZ_ENABLED"] = "false"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "false"
 # Isolate tests from a real local .env (Qobuz credentials must never leak in).
@@ -81,9 +83,39 @@ def api_client(session_factory):
         app.dependency_overrides.clear()
 
 
-@pytest.fixture(scope="session")
-def auth_headers():
-    return {"Authorization": "Bearer test-auth-token-12345"}
+@pytest.fixture()
+def owner_user(db):
+    from app.models import User, UserRole, UserState, utcnow
+
+    owner = db.query(User).filter(User.is_bootstrap_owner.is_(True)).one_or_none()
+    if owner is None:
+        owner = User(
+            email="owner@example.test",
+            email_key="owner@example.test",
+            role=UserRole.owner,
+            state=UserState.active,
+            is_bootstrap_owner=True,
+            created_at=utcnow(),
+            activated_at=utcnow(),
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+    return owner
+
+
+@pytest.fixture()
+def auth_headers(db, owner_user):
+    from app.models import SessionKind
+    from app.services.authentication import create_session
+
+    raw, csrf, _ = create_session(db, owner_user, kind=SessionKind.google)
+    db.commit()
+    return {
+        "Cookie": f"audiofeel_session={raw}",
+        "Origin": "http://testserver",
+        "X-CSRF-Token": csrf,
+    }
 
 
 @pytest.fixture(scope="session")

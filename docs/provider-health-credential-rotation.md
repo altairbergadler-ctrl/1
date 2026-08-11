@@ -28,7 +28,9 @@ health API не входят.
 
 ## Credential vault
 
-`provider_credentials` хранит только:
+System-owned `provider_credentials` хранит только Qobuz/Yandex acquisition
+credentials. `user_provider_credentials` хранит отдельно по `(user_id,
+provider)` Spotify/Yandex playlist credentials. Обе таблицы содержат только:
 
 - provider и монотонную version;
 - AES-256-GCM ciphertext и nonce;
@@ -37,10 +39,12 @@ health API не входят.
 
 Ключи в PostgreSQL не хранятся:
 
-- `provider-credentials.key` шифрует Yandex и Spotify;
+- `provider-credentials.key` шифрует system Yandex и user-owned
+  Spotify/Yandex;
 - `qobuz-credentials.key` шифрует только Qobuz и доступен Qobuz sidecar;
-- backend получает оба ключа для rotation, worker — только Yandex/Spotify key,
-  migration — только Yandex/Spotify key, Qobuz sidecar — только Qobuz key;
+- backend получает оба ключа для rotation, worker — только
+  provider/user-provider key, migration — только этот же key, Qobuz sidecar —
+  только Qobuz key;
 - оба файла ignored и монтируются read-only как Docker Secrets;
 - Qobuz/Yandex account tokens принудительно очищаются из environment сервисов.
 
@@ -50,7 +54,8 @@ health API не входят.
 
 ## Атомарная ротация
 
-1. Authenticated same-origin UI отправляет новый credential в JSON body по TLS.
+1. Owner-only authenticated same-origin UI отправляет новый system credential
+   в JSON body по TLS.
 2. Backend берёт provider advisory lock и шифрует временный envelope новой версии.
 3. Qobuz sidecar расшифровывает envelope в памяти и выполняет connect; Yandex
    client выполняет `init()` с новым токеном.
@@ -75,16 +80,22 @@ service worker.
 - `PUT /api/providers/yandex/credentials` с `token`.
 
 Credential endpoints возвращают только provider, configured, version,
-updated_at и необязательный безопасный label.
+updated_at и необязательный безопасный label. User-owned Spotify/Yandex
+playlist credentials доступны только своему source flow и API не выдаются.
 
 ## Upgrade
 
-Migration `0005_provider_health_credentials` создаёт vault/health tables.
-После `alembic upgrade head` команда `python -m app.commands.migrate_credentials`
-однократно переносит существующие Spotify/Yandex tokens из `playlist_sources`
-и зануляет legacy columns. Команда выводит только количество перенесённых строк
-и безопасна при повторном запуске. Qobuz при первом переходе вводится через PWA;
-старые `QOBUZ_AUTH_TOKEN/QOBUZ_USER_ID` Compose больше не передаёт контейнерам.
+Migration `0005_provider_health_credentials` создала исходный vault/health.
+При переходе на `0009_google_user_auth_contract` сервис
+`app.commands.migrate_database` сначала шифрует оставшиеся legacy source
+tokens, затем переносит Spotify и Yandex playlist credentials bootstrap owner.
+Global Spotify удаляется из system vault; global Yandex сохраняется как
+acquisition credential. Команда выводит только counts и безопасна при
+повторном запуске. Qobuz вводится через owner PWA; старые
+`QOBUZ_AUTH_TOKEN/QOBUZ_USER_ID` Compose не передаёт контейнерам.
+
+Google Login client secret и `auth.key` не входят ни в один provider vault:
+это отдельные Docker secrets, описанные в `docs/google-user-auth.md`.
 
 ## Docker-приёмка 2026-08-10
 

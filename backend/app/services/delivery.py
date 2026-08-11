@@ -15,7 +15,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Album, File as LibraryFile, MatchStatus, Playlist, PlaylistItem, Track
+from app.models import (
+    Album,
+    File as LibraryFile,
+    Match,
+    MatchStatus,
+    Playlist,
+    PlaylistItem,
+    Track,
+)
 from app.services.google_drive import DriveDownload, GoogleDriveError
 from app.services.storage import cleanup_expired_storage_cache, client_for_account
 
@@ -168,8 +176,12 @@ def _entry_for_track(
     )
 
 
-def playlist_item_entry(db: Session, item_id: int) -> DeliveryEntry:
-    item = db.get(PlaylistItem, item_id)
+def playlist_item_entry(db: Session, item_id: int, user_id: int) -> DeliveryEntry:
+    item = db.scalar(
+        select(PlaylistItem)
+        .join(Playlist, Playlist.id == PlaylistItem.playlist_id)
+        .where(PlaylistItem.id == item_id, Playlist.user_id == user_id)
+    )
     if item is None:
         raise DeliveryResourceNotFound("Playlist item not found")
     if (
@@ -181,8 +193,12 @@ def playlist_item_entry(db: Session, item_id: int) -> DeliveryEntry:
     return _entry_for_track(item.match.track)
 
 
-def playlist_entries(db: Session, playlist_id: int) -> tuple[Playlist, list[DeliveryEntry]]:
-    playlist = db.get(Playlist, playlist_id)
+def playlist_entries(
+    db: Session, playlist_id: int, user_id: int
+) -> tuple[Playlist, list[DeliveryEntry]]:
+    playlist = db.scalar(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user_id)
+    )
     if playlist is None:
         raise DeliveryResourceNotFound("Playlist not found")
     items = db.scalars(
@@ -207,14 +223,34 @@ def playlist_entries(db: Session, playlist_id: int) -> tuple[Playlist, list[Deli
     return playlist, entries
 
 
-def album_entries(db: Session, album_id: int) -> tuple[Album, list[DeliveryEntry]]:
-    album = db.get(Album, album_id)
+def album_entries(db: Session, album_id: int, user_id: int) -> tuple[Album, list[DeliveryEntry]]:
+    album = db.scalar(
+        select(Album)
+        .join(Track, Track.album_id == Album.id)
+        .join(Match, Match.track_id == Track.id)
+        .join(PlaylistItem, PlaylistItem.id == Match.playlist_item_id)
+        .join(Playlist, Playlist.id == PlaylistItem.playlist_id)
+        .where(
+            Album.id == album_id,
+            Playlist.user_id == user_id,
+            Match.status == MatchStatus.ready,
+        )
+        .limit(1)
+    )
     if album is None:
         raise DeliveryResourceNotFound("Album not found")
     tracks = list(
         db.scalars(
             select(Track)
-            .where(Track.album_id == album.id)
+            .join(Match, Match.track_id == Track.id)
+            .join(PlaylistItem, PlaylistItem.id == Match.playlist_item_id)
+            .join(Playlist, Playlist.id == PlaylistItem.playlist_id)
+            .where(
+                Track.album_id == album.id,
+                Playlist.user_id == user_id,
+                Match.status == MatchStatus.ready,
+            )
+            .distinct()
             .order_by(Track.disc_no, Track.track_no, Track.title, Track.id)
         )
     )

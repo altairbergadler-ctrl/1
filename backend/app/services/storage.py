@@ -322,7 +322,7 @@ def _cleanup_oauth_states(db: Session) -> None:
     db.flush()
 
 
-def begin_google_oauth(db: Session) -> str:
+def begin_google_oauth(db: Session, initiated_by_user_id: int) -> str:
     _cleanup_oauth_states(db)
     config_name = _config_name_for_connect(db)
     config = _oauth_config(read_storage_secret(db, config_name))
@@ -338,6 +338,7 @@ def begin_google_oauth(db: Session) -> str:
         StorageOAuthState(
             state_hash=state_hash,
             secret_id=secret_record.id,
+            initiated_by_user_id=initiated_by_user_id,
             expires_at=utcnow()
             + timedelta(seconds=settings.google_drive_oauth_state_ttl_seconds),
         )
@@ -372,10 +373,20 @@ def _apply_about(account: StorageAccount, about: dict[str, Any]) -> None:
     account.updated_at = utcnow()
 
 
-def complete_google_oauth(db: Session, state: str, code: str) -> StorageAccount:
+def complete_google_oauth(
+    db: Session,
+    state: str,
+    code: str,
+    initiated_by_user_id: int,
+) -> StorageAccount:
     state_hash = _hash_state(state)
     row = db.scalar(
-        select(StorageOAuthState).where(StorageOAuthState.state_hash == state_hash)
+        select(StorageOAuthState)
+        .where(
+            StorageOAuthState.state_hash == state_hash,
+            StorageOAuthState.initiated_by_user_id == initiated_by_user_id,
+        )
+        .with_for_update()
     )
     now = utcnow()
     if (
@@ -475,7 +486,10 @@ def complete_google_oauth(db: Session, state: str, code: str) -> StorageAccount:
         if config_name == PENDING_OAUTH_CONFIG:
             delete_storage_secret(db, PENDING_OAUTH_CONFIG)
         stale = db.scalar(
-            select(StorageOAuthState).where(StorageOAuthState.state_hash == state_hash)
+            select(StorageOAuthState).where(
+                StorageOAuthState.state_hash == state_hash,
+                StorageOAuthState.initiated_by_user_id == initiated_by_user_id,
+            )
         )
         if stale is not None:
             stale.consumed_at = stale.consumed_at or utcnow()
@@ -487,10 +501,15 @@ def complete_google_oauth(db: Session, state: str, code: str) -> StorageAccount:
         raise
 
 
-def discard_google_oauth_state(db: Session, state: str) -> None:
+def discard_google_oauth_state(
+    db: Session,
+    state: str,
+    initiated_by_user_id: int,
+) -> None:
     row = db.scalar(
         select(StorageOAuthState).where(
-            StorageOAuthState.state_hash == _hash_state(state)
+            StorageOAuthState.state_hash == _hash_state(state),
+            StorageOAuthState.initiated_by_user_id == initiated_by_user_id,
         )
     )
     if row is None or row.consumed_at is not None:

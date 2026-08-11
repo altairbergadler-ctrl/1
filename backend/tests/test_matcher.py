@@ -24,18 +24,24 @@ from app.services.matcher import (
     match_playlist_item,
     run_matching,
 )
+from tests.helpers import ensure_user
 
 
 def _playlist(db, *, external_id: str = "playlist-1") -> Playlist:
+    user = ensure_user(db)
     source = db.scalar(
-        select(PlaylistSource).where(PlaylistSource.service == ServiceEnum.spotify)
+        select(PlaylistSource).where(
+            PlaylistSource.user_id == user.id,
+            PlaylistSource.service == ServiceEnum.spotify,
+        )
     )
     if source is None:
-        source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+        source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
         db.add(source)
         db.flush()
     playlist = Playlist(
         source=source,
+        user_id=user.id,
         external_id=external_id,
         name=f"Playlist {external_id}",
         snapshot_hash=f"snapshot-{external_id}",
@@ -332,14 +338,14 @@ def test_manual_ready_is_recomputed_after_its_track_loses_every_file(db, tmp_pat
         duration_ms=180_000,
     )
     db.commit()
-    run_matching(db, playlist.id)
+    run_matching(db, playlist.user_id, playlist.id)
     item.match.method = MatchMethod.manual.value
     item.match.confidence = 1.0
     library_file = db.scalar(select(File).where(File.track_id == track.id))
     db.delete(library_file)
     db.commit()
 
-    summary = run_matching(db, playlist.id)
+    summary = run_matching(db, playlist.user_id, playlist.id)
 
     assert summary.missing == 1
     assert item.match.status == MatchStatus.missing
@@ -420,8 +426,8 @@ def test_run_matching_is_idempotent_and_can_be_scoped_to_one_playlist(db, tmp_pa
     )
     db.commit()
 
-    first = run_matching(db, playlist_id=first_playlist.id)
-    second = run_matching(db, playlist_id=first_playlist.id)
+    first = run_matching(db, first_playlist.user_id, playlist_id=first_playlist.id)
+    second = run_matching(db, first_playlist.user_id, playlist_id=first_playlist.id)
 
     assert first.to_dict() == {
         "total": 2,

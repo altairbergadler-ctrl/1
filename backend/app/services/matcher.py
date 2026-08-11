@@ -17,6 +17,7 @@ from app.models import (
     File as LibraryFile,
     Match,
     MatchStatus,
+    Playlist,
     PlaylistItem,
     Track,
 )
@@ -381,16 +382,22 @@ def _existing_manual_decision(
 
 def run_matching(
     db: Session,
+    user_id: int,
     playlist_id: int | None = None,
     *,
     progress_callback: Callable[[MatchingSummary], None] | None = None,
 ) -> MatchingSummary:
     """Upsert one match per playlist item and commit atomically."""
 
-    statement = select(PlaylistItem).order_by(
+    statement = (
+        select(PlaylistItem)
+        .join(Playlist, Playlist.id == PlaylistItem.playlist_id)
+        .where(Playlist.user_id == user_id)
+        .order_by(
         PlaylistItem.playlist_id,
         PlaylistItem.position,
         PlaylistItem.id,
+        )
     )
     if playlist_id is not None:
         statement = statement.where(PlaylistItem.playlist_id == playlist_id)

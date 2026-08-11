@@ -3,12 +3,17 @@
 ## 1. Концепция
 
 Сервис — self-hosted платформа, которая:
-1. Парсит торрент-трекеры по тематике «музыкальные альбомы в максимальном качестве» (FLAC 16/44.1, Hi-Res 24/96–24/192, DSD, vinyl rips).
-2. Скачивает раздачи на сетевое хранилище (NAS).
-3. Строит каталог-библиотеку всей музыки.
-4. Импортирует плейлисты пользователя из Spotify и Яндекс.Музыки.
-5. Сопоставляет треки из плейлистов с архивом.
-6. Отдаёт найденные файлы на смартфон **без сжатия и конвертации** (bit-perfect), для воспроизведения в любом локальном плеере.
+1. Впускает только заранее приглашённых Google-пользователей.
+2. Парсит торрент-трекеры по тематике «музыкальные альбомы в максимальном качестве» (FLAC 16/44.1, Hi-Res 24/96–24/192, DSD, vinyl rips).
+3. Скачивает раздачи на сетевое хранилище (NAS).
+4. Строит общий дедуплицированный каталог-библиотеку всей музыки.
+5. Импортирует личные плейлисты пользователя из Spotify, Яндекс.Музыки или файла.
+6. Сопоставляет треки из плейлистов с архивом.
+7. Отдаёт найденные файлы на смартфон **без сжатия и конвертации** (bit-perfect), для воспроизведения в любом локальном плеере.
+
+Многопользовательский принцип: **shared bytes, private rights**. Физические
+музыкальные файлы общие, а sources, playlists, jobs, matching review и право
+скачивания проверяются по `user_id` на каждом API-входе.
 
 ---
 
@@ -52,6 +57,18 @@
 - **Worker layer** — асинхронные воркеры: скрапинг, загрузка, сканирование, матчинг.
 - **API layer** — REST/GraphQL для Web UI и мобильного клиента.
 - **Client layer** — адаптивный Web UI (PWA) для смартфона; воспроизведение — во внешнем плеере пользователя.
+
+### Identity и access layer
+
+- Google Sign-In — invitation-only OIDC Authorization Code + PKCE, state,
+  nonce, проверка Google JWKS/aud/azp/exp/iat/email_verified.
+- После callback выдаётся собственная hashed server session в HttpOnly cookie;
+  Google tokens не сохраняются.
+- Unsafe API требует session-bound CSRF header и exact Origin/Referer.
+- Роль `owner` управляет invitations, system providers, каталогом и Google
+  Drive; роль `user` работает только со своими объектами.
+- `APP_AUTH_TOKEN` изолирован в краткоживущем bootstrap/recovery контуре.
+- Google Login и Google Drive используют разные OAuth clients/callbacks.
 
 ---
 
@@ -130,17 +147,30 @@ tracks(id, album_id, title, title_normalized, track_no, disc_no,
 files(id, track_id, path_on_nas, format, bit_depth, sample_rate,
       bitrate, size_bytes, sha1, spectrum_verified bool)
 releases(id, tracker, topic_url, magnet, status, quality_score)
-playlist_sources(id, service[spotify|yandex|manual])
-provider_credentials(id, provider, ciphertext, nonce, key_id, version,
-                     validated_at, updated_at)
+users(id, email, email_key, google_sub, display_name, role, state,
+      is_bootstrap_owner, created_at, activated_at, last_login_at)
+user_sessions(id, user_id, kind, token_hash, csrf_hash, created_at,
+              last_seen_at, expires_at, revoked_at)
+google_login_attempts(id, state_hash, browser_binding_hash, nonce_hash,
+                      encrypted_pkce, expires_at, consumed_at)
+playlist_sources(id, user_id, service[spotify|yandex|manual])
+user_provider_credentials(id, user_id, provider[spotify|yandex], ciphertext,
+                          nonce, key_id, version, validated_at, updated_at)
+provider_credentials(id, provider[qobuz|yandex], ciphertext, nonce, key_id,
+                     version, validated_at, updated_at)
 provider_health(id, provider, component[account|provider_api|sidecar|worker],
                 state, checked_at, retry_at)
-playlists(id, source_id, external_id, name, snapshot_hash, updated_at)
+playlists(id, user_id, source_id, external_id, name, snapshot_hash, updated_at)
 playlist_items(id, playlist_id, position, artist_raw, title_raw,
                album_raw, isrc, external_track_id)
 matches(id, playlist_item_id, track_id, confidence, method, status)
-jobs(id, type, payload, status, retries)
+jobs(id, user_id|null, scope[user|system], source_id, playlist_id,
+     type, payload, status, retries)
 ```
+
+`playlist_sources` и `playlists` имеют composite constraints, не позволяющие
+сослаться на source другого пользователя. `jobs` применяет ту же проверку для
+source/playlist. `File.sha1` остаётся глобально уникальным.
 
 ---
 
@@ -190,6 +220,10 @@ jobs(id, type, payload, status, retries)
 
 ### Принцип
 **Никакого транскодинга.** Файл отдаётся как есть (HTTP Range / прямая ссылка), даже FLAC 24/192 и DSD.
+
+Перед выдачей требуется private grant: собственный READY `playlist_item` с
+match на общий `Track/File`. Чужой item, playlist или album возвращает `404`,
+не раскрывая существование объекта.
 
 ### Варианты доставки
 1. **PWA / Web UI (основной)**: пользователь на смартфоне открывает сервис → плейлист со статусами → кнопка «Скачать» по треку/альбомом/весь плейлист (zip без рекомпрессии аудио — просто упаковка, либо пачка файлов).

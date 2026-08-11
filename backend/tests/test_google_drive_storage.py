@@ -177,7 +177,7 @@ def test_oauth_callback_validates_before_promoting_pending_config(
         },
     )
     assert start.status_code == 200
-    assert start.headers["cache-control"] == "no-store"
+    assert start.headers["cache-control"] == "private, no-store"
     assert "new-client-secret" not in start.text
     state = parse_qs(urlparse(start.json()["authorization_url"]).query)["state"][0]
 
@@ -199,6 +199,7 @@ def test_oauth_callback_validates_before_promoting_pending_config(
     callback = api_client.get(
         "/api/storage/google/callback",
         params={"state": state, "code": "one-time-code"},
+        headers=auth_headers,
         follow_redirects=False,
     )
 
@@ -247,11 +248,13 @@ def test_oauth_state_is_single_use_and_success_response_has_no_secrets(
     success = api_client.get(
         "/api/storage/google/callback",
         params={"state": state, "code": "one-time-code"},
+        headers=auth_headers,
         follow_redirects=False,
     )
     replay = api_client.get(
         "/api/storage/google/callback",
         params={"state": state, "code": "one-time-code"},
+        headers=auth_headers,
         follow_redirects=False,
     )
     overview = api_client.get("/api/storage", headers=auth_headers)
@@ -261,7 +264,7 @@ def test_oauth_state_is_single_use_and_success_response_has_no_secrets(
     assert replay.status_code == 303
     assert "storage_error" in replay.headers["location"]
     assert overview.status_code == 200
-    assert overview.headers["cache-control"] == "no-store"
+    assert overview.headers["cache-control"] == "private, no-store"
     assert "durable-refresh-token" not in overview.text
     assert "valid-client-secret" not in overview.text
     assert overview.json()["accounts"][0]["email"] == "owner@example.test"

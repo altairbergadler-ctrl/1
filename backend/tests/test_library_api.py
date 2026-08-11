@@ -5,7 +5,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.models import Album, Artist, File, Job, JobStatus, Track, utcnow
+from app.models import Album, Artist, File, Job, JobScope, JobStatus, Track, utcnow
 
 
 def _populate_library(db):
@@ -88,7 +88,7 @@ def test_scan_creates_one_pending_job_and_jobs_endpoint_works(
 
     job_response = api_client.get(f"/api/jobs/{job_id}", headers=auth_headers)
     assert job_response.status_code == 200
-    assert job_response.json()["payload"]["path"]
+    assert "path" not in job_response.json()["payload"]
 
 
 def test_library_requires_auth(api_client):
@@ -102,6 +102,7 @@ def test_stale_heartbeat_is_failed_before_a_replacement_job_is_queued(
 ):
     stale = Job(
         type="scan_library",
+        scope=JobScope.system,
         status=JobStatus.running,
         payload="{}",
         heartbeat_at=utcnow() - timedelta(seconds=settings.scan_job_stale_seconds + 1),
@@ -126,6 +127,7 @@ def test_stale_heartbeat_is_failed_before_a_replacement_job_is_queued(
 def test_fresh_heartbeat_is_not_replaced(api_client, auth_headers, db, monkeypatch):
     active = Job(
         type="scan_library",
+        scope=JobScope.system,
         status=JobStatus.running,
         payload="{}",
         heartbeat_at=utcnow(),

@@ -5,17 +5,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import distinct, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth
+from app.auth import require_owner, require_owner_csrf
 from app.config import settings
 from app.db import get_db
-from app.models import Album, Artist, File, Job, JobStatus, Track, utcnow
+from app.models import Album, Artist, File, Job, JobScope, JobStatus, Track, utcnow
 from app.schemas import JobOut, LibraryAlbumsOut, LibraryStatsOut
 from app.workers.tasks import scan_library_task
 
-router = APIRouter(dependencies=[Depends(require_auth)])
+router = APIRouter(dependencies=[Depends(require_owner)])
 
 
-@router.post("/scan", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/scan",
+    response_model=JobOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_owner_csrf)],
+)
 def scan(db: Session = Depends(get_db)):
     if db.get_bind().dialect.name == "postgresql":
         db.execute(
@@ -56,6 +61,8 @@ def scan(db: Session = Depends(get_db)):
 
     job = Job(
         type="scan_library",
+        scope=JobScope.system,
+        user_id=None,
         status=JobStatus.pending,
         heartbeat_at=utcnow(),
         payload=json.dumps(

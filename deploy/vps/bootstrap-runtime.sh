@@ -33,6 +33,16 @@ ensure_key() {
 
 ensure_key "${SECRET_ROOT}/provider-credentials.key" root:root
 ensure_key "${SECRET_ROOT}/qobuz-credentials.key" 10001:10001
+ensure_key "${SECRET_ROOT}/auth.key" root:root
+
+# Compose always mounts the dedicated Google Login client-secret file.  It is
+# intentionally empty until the operator creates the separate OIDC client in
+# Google Cloud Console; bootstrap must never invent a value that looks valid.
+if [[ ! -e "${SECRET_ROOT}/google-login-client-secret" ]]; then
+  install -m 0400 /dev/null "${SECRET_ROOT}/google-login-client-secret"
+fi
+chown root:root "${SECRET_ROOT}/google-login-client-secret"
+chmod 0400 "${SECRET_ROOT}/google-login-client-secret"
 
 if [[ ! -e "${ENV_FILE}" ]]; then
   postgres_password=$(openssl rand -hex 32)
@@ -49,8 +59,22 @@ if [[ ! -e "${ENV_FILE}" ]]; then
     printf 'POSTGRES_PASSWORD=%s\n' "${postgres_password}"
     printf 'POSTGRES_DB=music\n'
     printf 'APP_AUTH_TOKEN=%s\n' "${app_auth_token}"
+    printf 'RELEASE_SHA=bootstrap\n'
+    printf 'PUBLIC_ORIGIN=https://audiofeel.su\n'
     printf 'AUTH_COOKIE_SECURE=true\n'
     printf 'AUTH_COOKIE_MAX_AGE_SECONDS=2592000\n'
+    printf 'AUTH_SESSION_IDLE_SECONDS=604800\n'
+    printf 'AUTH_SESSION_TOUCH_INTERVAL_SECONDS=300\n'
+    printf 'AUTH_RECOVERY_MAX_AGE_SECONDS=900\n'
+    printf 'AUTH_RECOVERY_IDLE_SECONDS=300\n'
+    printf 'AUTH_KEY_HOST_FILE=%s\n' "${SECRET_ROOT}/auth.key"
+    printf 'GOOGLE_LOGIN_CLIENT_ID=\n'
+    printf 'GOOGLE_LOGIN_CLIENT_SECRET_HOST_FILE=%s\n' \
+      "${SECRET_ROOT}/google-login-client-secret"
+    printf 'GOOGLE_LOGIN_REDIRECT_URI=https://audiofeel.su/api/auth/google/callback\n'
+    printf 'GOOGLE_LOGIN_STATE_TTL_SECONDS=600\n'
+    printf 'GOOGLE_LOGIN_CLOCK_SKEW_SECONDS=60\n'
+    printf 'GOOGLE_LOGIN_MAX_TOKEN_AGE_SECONDS=600\n'
     printf 'TZ=Europe/Moscow\n'
     printf 'MUSIC_LIBRARY_PATH=/music/library\n'
     printf 'MUSIC_LIBRARY_HOST_PATH=%s\n' "${LIBRARY_ROOT}"
@@ -96,6 +120,23 @@ ensure_env_default STORAGE_RECONCILE_INTERVAL_SECONDS 900
 ensure_env_default STORAGE_PRIMARY_BACKEND google_drive
 ensure_env_default GOOGLE_DRIVE_REDIRECT_URI \
   https://audiofeel.su/api/storage/google/callback
+ensure_env_default RELEASE_SHA bootstrap
+ensure_env_default PUBLIC_ORIGIN https://audiofeel.su
+ensure_env_default AUTH_COOKIE_SECURE true
+ensure_env_default AUTH_COOKIE_MAX_AGE_SECONDS 2592000
+ensure_env_default AUTH_SESSION_IDLE_SECONDS 604800
+ensure_env_default AUTH_SESSION_TOUCH_INTERVAL_SECONDS 300
+ensure_env_default AUTH_RECOVERY_MAX_AGE_SECONDS 900
+ensure_env_default AUTH_RECOVERY_IDLE_SECONDS 300
+ensure_env_default AUTH_KEY_HOST_FILE "${SECRET_ROOT}/auth.key"
+ensure_env_default GOOGLE_LOGIN_CLIENT_ID ""
+ensure_env_default GOOGLE_LOGIN_CLIENT_SECRET_HOST_FILE \
+  "${SECRET_ROOT}/google-login-client-secret"
+ensure_env_default GOOGLE_LOGIN_REDIRECT_URI \
+  https://audiofeel.su/api/auth/google/callback
+ensure_env_default GOOGLE_LOGIN_STATE_TTL_SECONDS 600
+ensure_env_default GOOGLE_LOGIN_CLOCK_SKEW_SECONDS 60
+ensure_env_default GOOGLE_LOGIN_MAX_TOKEN_AGE_SECONDS 600
 chmod 0600 "${ENV_FILE}"
 
 printf 'audiofeel runtime: ready (credentials not displayed)\n'

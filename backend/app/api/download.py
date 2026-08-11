@@ -8,6 +8,7 @@ from starlette.background import BackgroundTask
 
 from app.auth import require_auth
 from app.db import get_db
+from app.models import User
 from app.services.delivery import (
     DeliveryFileUnavailable,
     DeliveryNotReady,
@@ -29,10 +30,11 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 def download_track(
     item_id: int,
     request: Request,
+    current_user: User = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     try:
-        entry = playlist_item_entry(db, item_id)
+        entry = playlist_item_entry(db, item_id, current_user.id)
     except DeliveryResourceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DeliveryNotReady as exc:
@@ -76,9 +78,13 @@ def download_track(
 
 
 @router.get("/album/{album_id}")
-def download_album(album_id: int, db: Session = Depends(get_db)):
+def download_album(
+    album_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
     try:
-        album, entries = album_entries(db, album_id)
+        album, entries = album_entries(db, album_id, current_user.id)
     except DeliveryResourceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DeliveryNotReady as exc:
@@ -110,11 +116,12 @@ def download_album(album_id: int, db: Session = Depends(get_db)):
 def download_playlist(
     playlist_id: int,
     mode: Literal["matched"] = "matched",
+    current_user: User = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     del mode
     try:
-        playlist, entries = playlist_entries(db, playlist_id)
+        playlist, entries = playlist_entries(db, playlist_id, current_user.id)
     except DeliveryResourceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DeliveryNotReady as exc:
@@ -144,9 +151,13 @@ def download_playlist(
 
 
 @router.get("/playlist/{playlist_id}/m3u8")
-def download_playlist_m3u8(playlist_id: int, db: Session = Depends(get_db)):
+def download_playlist_m3u8(
+    playlist_id: int,
+    current_user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
     try:
-        playlist, entries = playlist_entries(db, playlist_id)
+        playlist, entries = playlist_entries(db, playlist_id, current_user.id)
     except DeliveryResourceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except DeliveryNotReady as exc:

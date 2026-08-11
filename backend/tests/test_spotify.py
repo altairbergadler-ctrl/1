@@ -26,7 +26,11 @@ from app.services.spotify import (
     save_spotify_token,
     spotify_playlist_id_from_url,
 )
-from app.services.credentials import get_credential_payload
+from app.services.user_credentials import (
+    get_user_credential_payload,
+    save_user_credential,
+)
+from tests.helpers import ensure_user
 
 
 class FakeRedis:
@@ -197,13 +201,20 @@ class FakeSpotify:
 
 
 def _source(db) -> PlaylistSource:
+    user = ensure_user(db)
     source = PlaylistSource(
+        user_id=user.id,
         service=ServiceEnum.spotify,
-        access_token="test-access",
-        refresh_token="test-refresh",
         expires_at=utcnow() + timedelta(hours=1),
     )
     db.add(source)
+    db.flush()
+    save_user_credential(
+        db,
+        user.id,
+        "spotify",
+        {"access_token": "test-access", "refresh_token": "test-refresh"},
+    )
     db.commit()
     return source
 
@@ -234,6 +245,7 @@ def test_public_playlist_url_validation_is_strict_and_canonical():
 def test_playlist_url_import_uses_connected_spotify_source(db):
     playlist_id = "37i9dQZF1DXcBWIGoYBM5M"
     spotify = FakeSpotify()
+    source = _source(db)
     source = save_spotify_token(
         db,
         SpotifyToken(
@@ -241,11 +253,13 @@ def test_playlist_url_import_uses_connected_spotify_source(db):
             refresh_token="user-refresh",
             expires_at=utcnow() + timedelta(hours=1),
         ),
+        source=source,
     )
 
     summary, playlist = import_spotify_playlist_url(
         db,
         f"https://open.spotify.com/playlist/{playlist_id}?si=ignored",
+        source,
         spotify,
         normalizer=_simple_normalize,
     )
@@ -261,9 +275,7 @@ def test_playlist_url_import_uses_connected_spotify_source(db):
     assert summary.created == 1
     assert summary.tracks_imported == 1
     assert playlist.external_id == playlist_id
-    assert source.access_token is None
-    assert source.refresh_token is None
-    assert get_credential_payload(db, "spotify") == {
+    assert get_user_credential_payload(db, source.user_id, "spotify") == {
         "access_token": "user-access",
         "refresh_token": "user-refresh",
     }
@@ -350,12 +362,13 @@ def test_exchange_wraps_provider_errors_without_exposing_details():
 
 
 def test_save_token_creates_then_updates_the_single_spotify_source(db):
+    source = _source(db)
     first = SpotifyToken(
         access_token="first-access",
         refresh_token="first-refresh",
         expires_at=datetime(2030, 1, 1),
     )
-    source = save_spotify_token(db, first)
+    source = save_spotify_token(db, first, source=source)
     source_id = source.id
 
     second = SpotifyToken(
@@ -366,9 +379,7 @@ def test_save_token_creates_then_updates_the_single_spotify_source(db):
     updated = save_spotify_token(db, second, source=source)
 
     assert updated.id == source_id
-    assert updated.access_token is None
-    assert updated.refresh_token is None
-    assert get_credential_payload(db, "spotify") == {
+    assert get_user_credential_payload(db, source.user_id, "spotify") == {
         "access_token": "second-access",
         "refresh_token": "first-refresh",
     }

@@ -10,10 +10,10 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth, require_same_origin
+from app.auth import require_owner, require_owner_csrf
 from app.config import settings
 from app.db import get_db
-from app.models import Job, JobStatus, StorageAccount, utcnow
+from app.models import Job, JobScope, JobStatus, StorageAccount, User, utcnow
 from app.schemas import (
     GoogleOAuthConfigIn,
     GoogleOAuthStartOut,
@@ -35,7 +35,7 @@ from app.services.storage import (
 from app.services.storage_secrets import StorageSecretError
 from app.workers.tasks import storage_health_check_task, storage_migration_task
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_owner)])
 
 
 def _no_store(response: Response) -> None:
@@ -70,7 +70,6 @@ def _overview(db: Session) -> dict:
 @router.get(
     "",
     response_model=StorageOverviewOut,
-    dependencies=[Depends(require_auth)],
 )
 def storage_overview(response: Response, db: Session = Depends(get_db)):
     _no_store(response)
@@ -80,11 +79,12 @@ def storage_overview(response: Response, db: Session = Depends(get_db)):
 @router.put(
     "/google/oauth-config",
     response_model=GoogleOAuthStartOut,
-    dependencies=[Depends(require_auth), Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def configure_google_oauth(
     payload: GoogleOAuthConfigIn,
     response: Response,
+    current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
     _no_store(response)
@@ -94,7 +94,7 @@ def configure_google_oauth(
             payload.client_id,
             payload.client_secret.get_secret_value(),
         )
-        url = begin_google_oauth(db)
+        url = begin_google_oauth(db, current_user.id)
         db.commit()
     except (StorageError, StorageSecretError) as exc:
         db.rollback()
@@ -108,12 +108,16 @@ def configure_google_oauth(
 @router.post(
     "/google/connect",
     response_model=GoogleOAuthStartOut,
-    dependencies=[Depends(require_auth), Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
-def connect_google(response: Response, db: Session = Depends(get_db)):
+def connect_google(
+    response: Response,
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
     _no_store(response)
     try:
-        url = begin_google_oauth(db)
+        url = begin_google_oauth(db, current_user.id)
         db.commit()
     except (StorageError, StorageSecretError) as exc:
         db.rollback()
@@ -132,17 +136,29 @@ def _callback_redirect(result: str, value: str = "1") -> RedirectResponse:
 
 @router.get("/google/callback", include_in_schema=False)
 def google_callback(
-    state: str = Query(min_length=16, max_length=512),
-    code: str | None = Query(default=None, min_length=1, max_length=4096),
-    error: str | None = Query(default=None, max_length=256),
+    state: str | None = Query(default=None),
+    code: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    current_user: User = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
+    if (
+        not state
+        or len(state) < 16
+        or len(state) > 512
+        or (code is not None and (not code or len(code) > 4096))
+        or (error is not None and len(error) > 256)
+    ):
+        return _callback_redirect("storage_error", "oauth_invalid")
     if error or not code:
-        discard_google_oauth_state(db, state)
-        db.commit()
+        try:
+            discard_google_oauth_state(db, state, current_user.id)
+            db.commit()
+        except (StorageError, StorageSecretError):
+            db.rollback()
         return _callback_redirect("storage_error", "oauth_denied")
     try:
-        complete_google_oauth(db, state, code)
+        complete_google_oauth(db, state, code, current_user.id)
     except GoogleDriveAuthError:
         return _callback_redirect("storage_error", "credential_rejected")
     except (GoogleDriveError, StorageError, StorageSecretError):
@@ -153,7 +169,7 @@ def google_callback(
 @router.patch(
     "/accounts/{account_id}",
     response_model=StorageAccountOut,
-    dependencies=[Depends(require_auth), Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def update_storage_account(
     account_id: int,
@@ -179,7 +195,7 @@ def update_storage_account(
     "/accounts/{account_id}/health-check",
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_auth), Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def run_storage_health_check(
     account_id: int,
@@ -192,6 +208,8 @@ def run_storage_health_check(
         raise HTTPException(status_code=404, detail="Storage account not found")
     job = Job(
         type="storage_health_check",
+        scope=JobScope.system,
+        user_id=None,
         status=JobStatus.pending,
         payload=json.dumps({"account_id": account.id}, separators=(",", ":")),
         heartbeat_at=utcnow(),
@@ -214,7 +232,7 @@ def run_storage_health_check(
     "/migrate-local",
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_auth), Depends(require_same_origin)],
+    dependencies=[Depends(require_owner_csrf)],
 )
 def migrate_local_storage(response: Response, db: Session = Depends(get_db)):
     _no_store(response)
@@ -228,6 +246,8 @@ def migrate_local_storage(response: Response, db: Session = Depends(get_db)):
         return active
     job = Job(
         type="storage_migration",
+        scope=JobScope.system,
+        user_id=None,
         status=JobStatus.pending,
         payload=json.dumps({"phase": "queued"}, separators=(",", ":")),
         heartbeat_at=utcnow(),

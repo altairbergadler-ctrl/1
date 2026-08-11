@@ -519,18 +519,26 @@ def import_playlists_task(
         source = db.get(PlaylistSource, source_id)
         if source is None:
             raise ValueError(f"Playlist source {source_id} does not exist")
+        if job.user_id is None or source.user_id != job.user_id:
+            raise ValueError("Playlist import ownership does not match")
         playlist = None
         if playlist_id is not None:
             playlist = db.get(Playlist, playlist_id)
-            if playlist is None or playlist.source_id != source.id:
+            if (
+                playlist is None
+                or playlist.source_id != source.id
+                or playlist.user_id != job.user_id
+            ):
                 raise ValueError("Playlist does not belong to the import source")
 
         matching_summary = None
         if source.service == ServiceEnum.spotify:
             if url is not None:
-                summary, playlist = import_spotify_playlist_url(db, url)
+                summary, playlist = import_spotify_playlist_url(db, url, source)
                 playlist_id = playlist.id
-                matching_summary = run_matching(db, playlist_id=playlist_id)
+                matching_summary = run_matching(
+                    db, source.user_id, playlist_id=playlist_id
+                )
             else:
                 summary = (
                     refresh_spotify_playlist(db, playlist)
@@ -650,6 +658,7 @@ def import_playlists_task(
 def run_matching_task(
     self,
     job_id: int,
+    user_id: int,
     playlist_id: int | None = None,
 ):
     db = SessionLocal()
@@ -660,6 +669,8 @@ def run_matching_task(
             return {"status": "missing_job", "job_id": job_id}
         if job.status in (JobStatus.done, JobStatus.failed):
             return json.loads(job.payload or "{}")
+        if job.user_id != user_id:
+            raise ValueError("Matching job ownership does not match")
 
         started_id = db.scalar(
             update(Job)
@@ -685,7 +696,11 @@ def run_matching_task(
         db.commit()
         db.expire_all()
 
-        summary = run_matching(db, playlist_id=playlist_id)
+        if playlist_id is not None:
+            playlist = db.get(Playlist, playlist_id)
+            if playlist is None or playlist.user_id != user_id:
+                raise ValueError("Matching playlist ownership does not match")
+        summary = run_matching(db, user_id, playlist_id=playlist_id)
         final_payload = json.dumps(
             {
                 "phase": "completed",
@@ -801,6 +816,8 @@ def qobuz_download_task(
             # Повторная доставка уже завершённой задачи (acks_late): просто
             # возвращаем сохранённый результат, ничего не выполняя заново.
             return json.loads(job.payload or "{}")
+        if job.user_id is None:
+            raise ValueError("Qobuz job has no owner")
 
         started_id = db.scalar(
             update(Job)
@@ -859,7 +876,7 @@ def qobuz_download_task(
             }
         elif mode == "fetch_missing":
             playlist = db.get(Playlist, playlist_id)
-            if playlist is None:
+            if playlist is None or playlist.user_id != job.user_id:
                 raise ValueError(f"Playlist {playlist_id} does not exist")
 
             def update_download_progress(summary):
@@ -1051,7 +1068,9 @@ def qobuz_download_task(
                     separators=(",", ":"),
                 ),
             )
-            matching_summary = run_matching(db, playlist_id=playlist_id)
+            matching_summary = run_matching(
+                db, job.user_id, playlist_id=playlist_id
+            )
             matching_payload = matching_summary.to_dict()
 
         final_payload = json.dumps(
@@ -1401,7 +1420,8 @@ def yandex_download_task(self, job_id: int, playlist_id: int):
             return {"status": "missing_job", "job_id": job_id}
         if job.status in (JobStatus.done, JobStatus.failed):
             return json.loads(job.payload or "{}")
-
+        if job.user_id is None:
+            raise ValueError("Yandex job has no owner")
         started_id = db.scalar(
             update(Job)
             .where(
@@ -1427,7 +1447,7 @@ def yandex_download_task(self, job_id: int, playlist_id: int):
         db.expire_all()
 
         playlist = db.get(Playlist, playlist_id)
-        if playlist is None:
+        if playlist is None or playlist.user_id != job.user_id:
             raise ValueError(f"Playlist {playlist_id} does not exist")
         client = create_yandex_acquisition_client(db)
 
@@ -1587,7 +1607,9 @@ def yandex_download_task(self, job_id: int, playlist_id: int):
                     separators=(",", ":"),
                 ),
             )
-            matching_payload = run_matching(db, playlist_id=playlist_id).to_dict()
+            matching_payload = run_matching(
+                db, job.user_id, playlist_id=playlist_id
+            ).to_dict()
 
         final_payload = json.dumps(
             {

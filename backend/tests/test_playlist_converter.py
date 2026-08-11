@@ -103,7 +103,7 @@ def test_content_import_creates_manual_playlist_and_queues_matching(
         ("Artist Two", "Second Song"),
     ]
     assert json.loads(job.payload) == {"playlist_id": playlist.id}
-    assert queued == [(job.id, playlist.id)]
+    assert queued == [(job.id, playlist.user_id, playlist.id)]
 
 
 def test_manual_source_is_connected_but_cannot_run_provider_import(

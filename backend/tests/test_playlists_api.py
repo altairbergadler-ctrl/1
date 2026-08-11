@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.models import (
     Job,
+    JobScope,
     JobStatus,
     Match,
     MatchStatus,
@@ -18,12 +19,15 @@ from app.models import (
     utcnow,
 )
 from app.services.spotify import SpotifyToken, save_spotify_token
+from tests.helpers import ensure_user
 
 
 def _seed_playlist(db):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
     playlist = Playlist(
         source=source,
+        user_id=user.id,
         external_id="spotify-playlist-1",
         name="API Playlist",
         snapshot_hash="snapshot-1",
@@ -182,6 +186,7 @@ def test_incompatible_active_refresh_returns_conflict(
     source, first_playlist = _seed_playlist(db)
     second_playlist = Playlist(
         source_id=source.id,
+        user_id=source.user_id,
         external_id="spotify-playlist-2",
         name="Second playlist",
         snapshot_hash="snapshot-2",
@@ -232,6 +237,8 @@ def test_stale_import_is_revoked_before_replacement_is_queued(
     stale = Job(
         type="import_playlists",
         source_id=source.id,
+        user_id=source.user_id,
+        scope=JobScope.user,
         status=JobStatus.running,
         payload=json.dumps({"source_id": source.id}),
         heartbeat_at=utcnow()
@@ -264,12 +271,15 @@ def test_stale_import_is_revoked_before_replacement_is_queued(
 
 
 def test_database_rejects_two_active_import_jobs_for_one_source(db):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
     db.add(source)
     db.flush()
     first = Job(
         type="import_playlists",
         source_id=source.id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps({"source_id": source.id}),
     )
@@ -280,6 +290,8 @@ def test_database_rejects_two_active_import_jobs_for_one_source(db):
         Job(
             type="import_playlists",
             source_id=source.id,
+            user_id=user.id,
+            scope=JobScope.user,
             status=JobStatus.running,
             payload=json.dumps({"source_id": source.id}),
         )
@@ -293,6 +305,10 @@ def test_public_spotify_url_queues_one_canonical_import(
     api_client, auth_headers, db, monkeypatch
 ):
     playlist_id = "37i9dQZF1DXcBWIGoYBM5M"
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    db.add(source)
+    db.flush()
     source = save_spotify_token(
         db,
         SpotifyToken(
@@ -300,6 +316,7 @@ def test_public_spotify_url_queues_one_canonical_import(
             refresh_token="user-refresh",
             expires_at=utcnow() + timedelta(hours=1),
         ),
+        source=source,
     )
     queued = []
     monkeypatch.setattr(

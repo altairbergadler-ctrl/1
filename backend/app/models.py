@@ -4,13 +4,16 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -48,6 +51,32 @@ class JobStatus(str, enum.Enum):
     failed = "failed"
 
 
+class UserRole(str, enum.Enum):
+    owner = "owner"
+    user = "user"
+
+
+class UserState(str, enum.Enum):
+    pending = "pending"
+    active = "active"
+    disabled = "disabled"
+
+
+class SessionKind(str, enum.Enum):
+    google = "google"
+    recovery = "recovery"
+
+
+class JobScope(str, enum.Enum):
+    user = "user"
+    system = "system"
+
+
+class UserProvider(str, enum.Enum):
+    spotify = "spotify"
+    yandex = "yandex"
+
+
 class ProviderHealthState(str, enum.Enum):
     healthy = "healthy"
     expired = "expired"
@@ -66,40 +95,149 @@ class ProviderHealthComponent(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
-    login = Column(String(128), unique=True, nullable=False)
-    token = Column(String(256), nullable=False)
+    email = Column(String(320))
+    email_key = Column(String(320))
+    google_sub = Column(String(255), unique=True)
+    display_name = Column(String(255))
+    role = Column(
+        Enum(UserRole, values_callable=enum_values, name="user_role"),
+        nullable=False,
+        default=UserRole.user,
+    )
+    state = Column(
+        Enum(UserState, values_callable=enum_values, name="user_state"),
+        nullable=False,
+        default=UserState.pending,
+    )
+    is_bootstrap_owner = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    activated_at = Column(DateTime)
+    last_login_at = Column(DateTime)
+    sessions = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
+    )
+    provider_credentials = relationship(
+        "UserProviderCredential", back_populates="user", cascade="all, delete-orphan"
+    )
+    sources = relationship("PlaylistSource", back_populates="user")
+    playlists = relationship(
+        "Playlist", back_populates="user", overlaps="playlists,source"
+    )
+    __table_args__ = (
+        Index(
+            "uq_users_email_key",
+            "email_key",
+            unique=True,
+            postgresql_where=text("email_key IS NOT NULL"),
+            sqlite_where=text("email_key IS NOT NULL"),
+        ),
+        Index(
+            "uq_users_single_bootstrap_owner",
+            "is_bootstrap_owner",
+            unique=True,
+            postgresql_where=text("is_bootstrap_owner"),
+            sqlite_where=text("is_bootstrap_owner = 1"),
+        ),
+        CheckConstraint(
+            "(email IS NULL AND email_key IS NULL) OR "
+            "(email IS NOT NULL AND email_key IS NOT NULL)",
+            name="ck_users_email_pair",
+        ),
+        CheckConstraint(
+            "email IS NOT NULL OR "
+            "(is_bootstrap_owner AND state = 'pending' AND google_sub IS NULL)",
+            name="ck_users_bootstrap_email",
+        ),
+    )
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    id = Column(String(36), primary_key=True)
+    user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(
+        Enum(SessionKind, values_callable=enum_values, name="session_kind"),
+        nullable=False,
+    )
+    token_hash = Column(LargeBinary, nullable=False, unique=True)
+    csrf_hash = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    last_seen_at = Column(DateTime, nullable=False, default=utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime)
+    user = relationship("User", back_populates="sessions")
+    __table_args__ = (
+        Index("ix_user_sessions_user_active", "user_id", "revoked_at"),
+        Index("ix_user_sessions_expires_at", "expires_at"),
+    )
+
+
+class GoogleLoginAttempt(Base):
+    __tablename__ = "google_login_attempts"
+    id = Column(String(36), primary_key=True)
+    state_hash = Column(LargeBinary, nullable=False, unique=True)
+    browser_binding_hash = Column(LargeBinary, nullable=False)
+    nonce_hash = Column(LargeBinary, nullable=False)
+    pkce_ciphertext = Column(Text, nullable=False)
+    pkce_nonce = Column(String(64), nullable=False)
+    key_id = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime)
+    __table_args__ = (Index("ix_google_login_attempts_expires_at", "expires_at"),)
 
 
 class PlaylistSource(Base):
     __tablename__ = "playlist_sources"
     id = Column(Integer, primary_key=True)
+    user_id = Column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     service = Column(
         Enum(ServiceEnum, values_callable=enum_values, name="service_enum"),
         nullable=False,
     )
-    access_token = Column(Text)
-    refresh_token = Column(Text)
     expires_at = Column(DateTime)
+    user = relationship("User", back_populates="sources")
     playlists = relationship(
-        "Playlist", back_populates="source", cascade="all, delete-orphan"
+        "Playlist",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        overlaps="playlists,user",
     )
-    __table_args__ = (UniqueConstraint("service", name="uq_playlist_sources_service"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "service", name="uq_playlist_sources_user_service"),
+        UniqueConstraint("id", "user_id", name="uq_playlist_sources_id_user"),
+    )
 
 
 class Playlist(Base):
     __tablename__ = "playlists"
     id = Column(Integer, primary_key=True)
-    source_id = Column(ForeignKey("playlist_sources.id"), nullable=False)
+    source_id = Column(Integer, nullable=False)
+    user_id = Column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     external_id = Column(String(256), nullable=False)
     name = Column(String(512), nullable=False)
     snapshot_hash = Column(String(256))
     track_count = Column(Integer, default=0)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
-    source = relationship("PlaylistSource", back_populates="playlists")
+    source = relationship(
+        "PlaylistSource", back_populates="playlists", overlaps="playlists,user"
+    )
+    user = relationship(
+        "User", back_populates="playlists", overlaps="playlists,source"
+    )
     items = relationship(
         "PlaylistItem", back_populates="playlist", cascade="all, delete-orphan"
     )
-    __table_args__ = (UniqueConstraint("source_id", "external_id"),)
+    __table_args__ = (
+        UniqueConstraint("source_id", "external_id"),
+        UniqueConstraint("id", "user_id", name="uq_playlists_id_user"),
+        ForeignKeyConstraint(
+            ["source_id", "user_id"],
+            ["playlist_sources.id", "playlist_sources.user_id"],
+            name="fk_playlists_source_user",
+            ondelete="RESTRICT",
+        ),
+    )
 
 
 class PlaylistItem(Base):
@@ -224,6 +362,15 @@ class Job(Base):
     source_id = Column(
         ForeignKey("playlist_sources.id", ondelete="SET NULL"), nullable=True
     )
+    playlist_id = Column(
+        ForeignKey("playlists.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id = Column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    scope = Column(
+        Enum(JobScope, values_callable=enum_values, name="job_scope"),
+        nullable=False,
+        default=JobScope.user,
+    )
     status = Column(
         Enum(JobStatus, values_callable=enum_values, name="job_status"),
         default=JobStatus.pending,
@@ -235,6 +382,22 @@ class Job(Base):
     lock_owner = Column(String(64))
     finished_at = Column(DateTime)
     __table_args__ = (
+        CheckConstraint(
+            "(scope = 'user' AND user_id IS NOT NULL) OR "
+            "(scope = 'system' AND user_id IS NULL)",
+            name="ck_jobs_scope_user",
+        ),
+        ForeignKeyConstraint(
+            ["source_id", "user_id"],
+            ["playlist_sources.id", "playlist_sources.user_id"],
+            name="fk_jobs_source_user",
+        ),
+        ForeignKeyConstraint(
+            ["playlist_id", "user_id"],
+            ["playlists.id", "playlists.user_id"],
+            name="fk_jobs_playlist_user",
+        ),
+        Index("ix_jobs_user_created", "user_id", "created_at"),
         Index(
             "uq_jobs_active_import_source",
             "source_id",
@@ -247,8 +410,8 @@ class Job(Base):
             ),
         ),
         Index(
-            "uq_jobs_active_matching",
-            "type",
+            "uq_jobs_active_matching_user",
+            "user_id",
             unique=True,
             postgresql_where=text(
                 "type = 'run_matching' AND status IN ('pending', 'running')"
@@ -309,6 +472,32 @@ class ProviderCredential(Base):
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
     validated_at = Column(DateTime, nullable=False)
+
+
+class UserProviderCredential(Base):
+    """Encrypted playlist-provider material scoped to one user."""
+
+    __tablename__ = "user_provider_credentials"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(
+        Enum(UserProvider, values_callable=enum_values, name="user_provider"),
+        nullable=False,
+    )
+    ciphertext = Column(Text, nullable=False)
+    nonce = Column(String(64), nullable=False)
+    key_id = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    expires_at = Column(DateTime)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    validated_at = Column(DateTime, nullable=False)
+    user = relationship("User", back_populates="provider_credentials")
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "provider", name="uq_user_provider_credentials_user_provider"
+        ),
+    )
 
 
 class ProviderHealth(Base):
@@ -399,6 +588,9 @@ class StorageOAuthState(Base):
     state_hash = Column(String(64), nullable=False, unique=True)
     secret_id = Column(
         ForeignKey("storage_secrets.id", ondelete="CASCADE"), nullable=False
+    )
+    initiated_by_user_id = Column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     expires_at = Column(DateTime, nullable=False)
     consumed_at = Column(DateTime)

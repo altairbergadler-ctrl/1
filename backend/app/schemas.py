@@ -8,14 +8,50 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 class HealthOut(BaseModel):
     status: str = "ok"
+    release_sha: str
 
 
 class LoginIn(BaseModel):
-    token: str
+    token: SecretStr = Field(min_length=16, max_length=4096)
 
 
 class LoginOut(BaseModel):
     authenticated: bool = True
+    csrf_token: str | None = None
+
+
+class CurrentUserOut(BaseModel):
+    id: int
+    email: str
+    display_name: str | None = None
+    role: Literal["owner", "user"]
+    csrf_token: str
+
+
+class UserAdminOut(BaseModel):
+    id: int
+    email: str | None
+    display_name: str | None = None
+    role: Literal["owner", "user"]
+    state: Literal["pending", "active", "disabled"]
+    created_at: datetime
+    activated_at: datetime | None = None
+    last_login_at: datetime | None = None
+    active_sessions: int = 0
+
+
+class UserAdminListOut(BaseModel):
+    items: list[UserAdminOut]
+
+
+class UserInviteIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: Literal["owner", "user"] = "user"
+
+
+class RecoveryOwnerInvitationIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    confirm: Literal["RESET BOOTSTRAP OWNER"]
 
 
 class JobOut(BaseModel):
@@ -33,13 +69,109 @@ class JobOut(BaseModel):
     @field_validator("payload", mode="before")
     @classmethod
     def parse_payload(cls, value):
-        if value is None or isinstance(value, dict):
-            return value
-        try:
-            parsed = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
-            return {"raw": str(value)}
-        return parsed if isinstance(parsed, dict) else {"value": parsed}
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            parsed = value
+        else:
+            try:
+                parsed = json.loads(value)
+            except (TypeError, json.JSONDecodeError):
+                return None
+        if not isinstance(parsed, dict):
+            return None
+        allowed = {
+            "source_id",
+            "playlist_id",
+            "mode",
+            "phase",
+            "provider",
+            "account_id",
+            "discovered",
+            "created",
+            "updated",
+            "unchanged",
+            "failed",
+            "tracks_imported",
+            "skipped_items",
+            "matched",
+            "missing",
+            "review",
+            "processed",
+            "imported",
+            "skipped",
+            "bytes",
+            "files",
+            "phase",
+            "progress",
+            "scan",
+            "musicbrainz",
+            "downloads",
+            "import",
+            "matching",
+            "storage",
+            "items",
+            "status",
+            "reason",
+            "total",
+            "added",
+            "changed",
+            "moved",
+            "removed",
+            "duplicate_content",
+            "enriched",
+            "not_found",
+            "needs_review",
+            "ready",
+            "batch_total",
+            "batch_count",
+            "batch_size",
+            "current_batch",
+            "eligible_total",
+            "total_missing",
+            "already_checked",
+            "downloaded",
+            "stored",
+            "item_id",
+            "selection",
+            "codec",
+            "source_codec",
+            "remuxed",
+            "uploaded",
+            "reused",
+            "evicted",
+            "deferred",
+            "result_status",
+            "service",
+        }
+
+        def sanitized(mapping: dict, depth: int = 0) -> dict:
+            if depth > 4:
+                return {}
+            result = {}
+            for key, item in mapping.items():
+                if key not in allowed:
+                    continue
+                if isinstance(item, (int, float, bool, type(None))):
+                    result[key] = item
+                elif isinstance(item, str):
+                    result[key] = item[:256]
+                elif isinstance(item, dict):
+                    result[key] = sanitized(item, depth + 1)
+                elif key == "items" and isinstance(item, list):
+                    result[key] = [
+                        sanitized(entry, depth + 1)
+                        for entry in item[:500]
+                        if isinstance(entry, dict)
+                    ]
+            return result
+
+        return sanitized(parsed)
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def redact_error(cls, value):
+        return "Job failed" if value else None
 
 
 class FormatStatsOut(BaseModel):

@@ -6,7 +6,7 @@ Google Drive хранит единственную постоянную копи
 диск используется только как временный staging/cache и не является постоянной
 библиотекой. Release 2 и torrent/qBittorrent automation не входят в итерацию.
 
-Один OAuth-проект обслуживает несколько Google-аккаунтов. Каждый аккаунт
+Один Drive OAuth client обслуживает несколько storage-аккаунтов. Каждый аккаунт
 предоставляет отдельную квоту и папку `Audiofeel Library`. Для нового файла
 worker выбирает включённый здоровый аккаунт с достаточным свободным местом;
 при временной ошибке переходит к следующему. Это пул ёмкости, а не скрытая
@@ -18,7 +18,8 @@ RAID-репликация.
 2. Включить [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com).
 3. Настроить OAuth consent screen. Если приложение находится в режиме Testing,
    добавить Google-адреса владельца в Test users.
-4. Создать OAuth Client ID типа **Web application**.
+4. Создать OAuth Client ID типа **Web application**, предназначенный только
+   для Drive storage.
 5. В `Authorized redirect URIs` точно добавить:
 
    `https://audiofeel.su/api/storage/google/callback`
@@ -27,6 +28,11 @@ RAID-репликация.
    нажать `Проверить через Google`.
 7. После возврата в Audiofeel добавлять остальные аккаунты кнопкой
    `Добавить аккаунт`.
+
+Google Sign-In пользователей — другой client и callback
+`/api/auth/google/callback` со scopes `openid email profile`. Нельзя
+использовать Drive client secret или refresh token как user login. Разделение
+описано в `docs/google-user-auth.md`.
 
 Официальные справочники Google:
 
@@ -84,7 +90,8 @@ remote-only файлы сначала скачиваются во временн
 
 ## Критерии приёмки
 
-- Alembic head `0006_google_drive_storage` на PostgreSQL;
+- Drive migration `0006_google_drive_storage` присутствует в цепочке; общий
+  текущий head — `0009_google_user_auth_contract`;
 - OAuth success, denial, expired/replayed state и сохранение старого config при
   неудачной проверке;
 - отсутствие Client secret/refresh/access token в API, логах и PWA storage;

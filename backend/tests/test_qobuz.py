@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.models import (
     Job,
+    JobScope,
     JobStatus,
     Match,
     MatchStatus,
@@ -39,6 +40,7 @@ from app.services.qobuz import (
     verify_staging_files,
 )
 from app.workers.tasks import qobuz_download_task
+from tests.helpers import ensure_user
 
 
 def _configure_qobuz(monkeypatch, *, enabled=True):
@@ -407,8 +409,11 @@ def test_select_best_track_candidate_rejects_ambiguous_fuzzy_results():
 def test_fetch_missing_persists_queued_searching_and_downloading_states(
     db, monkeypatch, tmp_path
 ):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="progress", name="Progress")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source, user_id=user.id, external_id="progress", name="Progress"
+    )
     item = PlaylistItem(
         playlist=playlist,
         position=0,
@@ -462,8 +467,11 @@ def test_fetch_missing_persists_queued_searching_and_downloading_states(
 def test_fetch_missing_sweeps_every_unattempted_track_in_batches(
     db, monkeypatch
 ):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="full-sweep", name="Full sweep")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source, user_id=user.id, external_id="full-sweep", name="Full sweep"
+    )
     db.add_all([source, playlist])
     db.flush()
     items = []
@@ -581,15 +589,16 @@ def test_conflicting_qobuz_request_returns_409(
 
     assert first.status_code == 202
     assert conflict.status_code == 409
-    assert conflict.json()["detail"]["job_id"] == first.json()["id"]
+    assert conflict.json()["detail"] == "Another Qobuz download is already running"
 
 
 def test_fetch_missing_validates_playlist_and_reuses_active_job(
     api_client, auth_headers, db, monkeypatch
 ):
     _configure_qobuz(monkeypatch)
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="p1", name="Playlist")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(source=source, user_id=user.id, external_id="p1", name="Playlist")
     db.add_all([source, playlist])
     db.commit()
     queued: list[tuple] = []
@@ -622,13 +631,19 @@ def test_fetch_missing_validates_playlist_and_reuses_active_job(
 def test_download_status_returns_latest_persisted_progress_for_playlist(
     api_client, auth_headers, db
 ):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="p1", name="Playlist")
-    empty_playlist = Playlist(source=source, external_id="p2", name="No runs")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(source=source, user_id=user.id, external_id="p1", name="Playlist")
+    empty_playlist = Playlist(
+        source=source, user_id=user.id, external_id="p2", name="No runs"
+    )
     db.add_all([source, playlist, empty_playlist])
     db.flush()
     older = Job(
         type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.done,
         payload=json.dumps(
             {
@@ -639,6 +654,9 @@ def test_download_status_returns_latest_persisted_progress_for_playlist(
     )
     latest = Job(
         type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.running,
         payload=json.dumps(
             {
@@ -677,8 +695,11 @@ def test_download_status_returns_latest_persisted_progress_for_playlist(
 def test_download_eligibility_is_provider_specific(
     api_client, auth_headers, db
 ):
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="eligible", name="Eligible")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source, user_id=user.id, external_id="eligible", name="Eligible"
+    )
     first = PlaylistItem(
         playlist=playlist,
         position=0,
@@ -751,8 +772,9 @@ def test_download_endpoints_require_configuration(
     api_client, auth_headers, db, monkeypatch
 ):
     _configure_qobuz(monkeypatch, enabled=False)
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="p1", name="Playlist")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(source=source, user_id=user.id, external_id="p1", name="Playlist")
     db.add_all([source, playlist])
     db.commit()
 
@@ -970,6 +992,7 @@ def test_sidecar_http_error_does_not_include_response_body(monkeypatch):
 
 def _create_qobuz_job(session_factory, playlist=None, mode="fetch_missing"):
     session = session_factory()
+    user = ensure_user(session)
     playlist_id = None
     if playlist is not None:
         session.add(playlist.source)
@@ -978,6 +1001,9 @@ def _create_qobuz_job(session_factory, playlist=None, mode="fetch_missing"):
         playlist_id = playlist.id
     job = Job(
         type="qobuz_download",
+        playlist_id=playlist_id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps({"mode": mode, "playlist_id": playlist_id}),
     )
@@ -1024,8 +1050,14 @@ def test_qobuz_fetch_missing_end_to_end(
     monkeypatch.setattr("app.config.settings.musicbrainz_enabled", False)
 
     session = session_factory()
-    source = PlaylistSource(service=ServiceEnum.spotify, access_token="token")
-    playlist = Playlist(source=source, external_id="qobuz-pl", name="Qobuz Playlist")
+    user = ensure_user(session)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id="qobuz-pl",
+        name="Qobuz Playlist",
+    )
     tracks = [
         ("Tagged Artist", "First Track", "Tagged Album"),
         ("Tagged Artist", "Second Track", "Tagged Album"),
@@ -1067,6 +1099,9 @@ def test_qobuz_fetch_missing_end_to_end(
         )
     job = Job(
         type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps({"mode": "fetch_missing", "playlist_id": playlist.id}),
     )

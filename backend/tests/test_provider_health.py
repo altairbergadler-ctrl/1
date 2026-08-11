@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 
 import pytest
+from sqlalchemy import text
 
-from app.models import Job, JobStatus, PlaylistSource, ServiceEnum
+from app.models import Job, JobScope, JobStatus, PlaylistSource, ServiceEnum
 from app.commands import migrate_credentials as credential_migration
 from app.services.credentials import (
     CredentialIntegrityError,
@@ -16,11 +17,16 @@ from app.services.credentials import (
     save_credential,
 )
 from app.services.provider_health import run_provider_health_check
+from app.services.user_credentials import (
+    get_user_credential_payload,
+    save_user_credential,
+)
 from app.services.qobuz import (
     QobuzAuthError,
     QobuzProviderError,
     QobuzRateLimitedError,
 )
+from tests.helpers import ensure_user
 
 
 def test_credential_envelope_round_trip_and_tamper_detection():
@@ -55,18 +61,30 @@ def test_legacy_source_credentials_migrate_and_are_cleared(
     session_factory, monkeypatch
 ):
     db = session_factory()
-    db.add_all(
-        [
-            PlaylistSource(
-                service=ServiceEnum.yandex,
-                access_token="legacy-yandex-token",
-            ),
-            PlaylistSource(
-                service=ServiceEnum.spotify,
-                access_token="legacy-spotify-access",
-                refresh_token="legacy-spotify-refresh",
-            ),
-        ]
+    user = ensure_user(db)
+    yandex_source = PlaylistSource(user_id=user.id, service=ServiceEnum.yandex)
+    spotify_source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    db.add_all([yandex_source, spotify_source])
+    db.commit()
+    db.execute(text("ALTER TABLE playlist_sources ADD COLUMN access_token TEXT"))
+    db.execute(text("ALTER TABLE playlist_sources ADD COLUMN refresh_token TEXT"))
+    db.execute(
+        text(
+            "UPDATE playlist_sources SET access_token = :token "
+            "WHERE id = :source_id"
+        ),
+        {"token": "legacy-yandex-token", "source_id": yandex_source.id},
+    )
+    db.execute(
+        text(
+            "UPDATE playlist_sources SET access_token = :access, "
+            "refresh_token = :refresh WHERE id = :source_id"
+        ),
+        {
+            "access": "legacy-spotify-access",
+            "refresh": "legacy-spotify-refresh",
+            "source_id": spotify_source.id,
+        },
     )
     db.commit()
     db.close()
@@ -75,9 +93,13 @@ def test_legacy_source_credentials_migrate_and_are_cleared(
     assert credential_migration.migrate() == 2
 
     db = session_factory()
-    sources = list(db.query(PlaylistSource).order_by(PlaylistSource.id))
-    assert all(source.access_token is None for source in sources)
-    assert all(source.refresh_token is None for source in sources)
+    remaining = db.execute(
+        text(
+            "SELECT count(*) FROM playlist_sources WHERE access_token IS NOT NULL "
+            "OR refresh_token IS NOT NULL"
+        )
+    ).scalar_one()
+    assert remaining == 0
     assert get_credential_payload(db, "yandex") == {"token": "legacy-yandex-token"}
     assert get_credential_payload(db, "spotify") == {
         "access_token": "legacy-spotify-access",
@@ -101,7 +123,7 @@ def test_qobuz_rotation_validates_before_activation(
     )
 
     assert response.status_code == 200
-    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["cache-control"] == "private, no-store"
     assert response.json() == {
         "provider": "qobuz",
         "configured": True,
@@ -149,14 +171,18 @@ def test_failed_qobuz_rotation_preserves_old_credential(
     assert get_credential_record(db, "qobuz").version == 1
 
 
-def test_yandex_rotation_clears_legacy_plaintext(
-    api_client, auth_headers, db, monkeypatch
+def test_system_yandex_rotation_does_not_overwrite_user_playlist_credential(
+    api_client, auth_headers, owner_user, db, monkeypatch
 ):
-    source = PlaylistSource(
-        service=ServiceEnum.yandex,
-        access_token="legacy-plaintext-token",
-    )
+    source = PlaylistSource(user_id=owner_user.id, service=ServiceEnum.yandex)
     db.add(source)
+    db.flush()
+    save_user_credential(
+        db,
+        owner_user.id,
+        "yandex",
+        {"token": "user-playlist-token"},
+    )
     db.commit()
     monkeypatch.setattr(
         "app.api.providers.create_yandex_client", lambda _token: object()
@@ -170,11 +196,11 @@ def test_yandex_rotation_clears_legacy_plaintext(
 
     assert response.status_code == 200
     assert "new-yandex-synthetic-token" not in response.text
-    db.refresh(source)
-    assert source.access_token is None
-    assert source.refresh_token is None
     assert get_credential_payload(db, "yandex") == {
         "token": "new-yandex-synthetic-token"
+    }
+    assert get_user_credential_payload(db, owner_user.id, "yandex") == {
+        "token": "user-playlist-token"
     }
 
 
@@ -310,5 +336,7 @@ def test_manual_health_check_queues_safe_job(
     assert response.status_code == 202
     job = db.get(Job, response.json()["id"])
     assert job.status == JobStatus.pending
+    assert job.scope == JobScope.system
+    assert job.user_id is None
     assert queued == [("qobuz", job.id)]
     assert "token" not in response.text.casefold()

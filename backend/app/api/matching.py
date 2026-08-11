@@ -6,10 +6,20 @@ from sqlalchemy import case, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import require_auth
+from app.auth import require_auth, require_csrf
 from app.config import settings
 from app.db import get_db
-from app.models import Job, JobStatus, Match, MatchStatus, Playlist, PlaylistItem, utcnow
+from app.models import (
+    Job,
+    JobScope,
+    JobStatus,
+    Match,
+    MatchStatus,
+    Playlist,
+    PlaylistItem,
+    User,
+    utcnow,
+)
 from app.schemas import (
     JobOut,
     MatchingRunIn,
@@ -26,7 +36,7 @@ from app.workers.tasks import run_matching_task
 
 router = APIRouter(dependencies=[Depends(require_auth)])
 
-_MATCH_QUEUE_LOCK_ID = 2026080804
+_MATCH_QUEUE_LOCK_NAMESPACE = 20260808
 
 
 def _payload_playlist_id(job: Job) -> int | None:
@@ -43,11 +53,12 @@ def _active_job_covers(active_job: Job, playlist_id: int | None) -> bool:
     return active_playlist_id is None or active_playlist_id == playlist_id
 
 
-def _find_active_job(db: Session) -> Job | None:
+def _find_active_job(db: Session, user_id: int) -> Job | None:
     return db.scalar(
         select(Job)
         .where(
             Job.type == "run_matching",
+            Job.user_id == user_id,
             Job.status.in_([JobStatus.pending, JobStatus.running]),
         )
         .order_by(
@@ -58,25 +69,27 @@ def _find_active_job(db: Session) -> Job | None:
     )
 
 
-def _reuse_or_conflict(db: Session, active_job: Job, playlist_id: int | None) -> Job:
+def _reuse_or_conflict(
+    db: Session,
+    active_job: Job,
+    user_id: int,
+    playlist_id: int | None,
+) -> Job:
     db.commit()
     db.refresh(active_job)
-    if _active_job_covers(active_job, playlist_id):
+    if active_job.user_id == user_id and _active_job_covers(active_job, playlist_id):
         return active_job
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail={
-            "job_id": active_job.id,
-            "message": "Another matching job is active",
-        },
+        detail="Another matching job is active",
     )
 
 
-def _queue_matching_job(db: Session, playlist_id: int | None) -> Job:
+def _queue_matching_job(db: Session, user_id: int, playlist_id: int | None) -> Job:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_id)"),
-            {"lock_id": _MATCH_QUEUE_LOCK_ID},
+            text("SELECT pg_advisory_xact_lock(:namespace, :user_id)"),
+            {"namespace": _MATCH_QUEUE_LOCK_NAMESPACE, "user_id": user_id},
         )
 
     now = utcnow()
@@ -85,6 +98,7 @@ def _queue_matching_job(db: Session, playlist_id: int | None) -> Job:
         update(Job)
         .where(
             Job.type == "run_matching",
+            Job.user_id == user_id,
             Job.status.in_([JobStatus.pending, JobStatus.running]),
             Job.heartbeat_at < cutoff,
         )
@@ -97,12 +111,15 @@ def _queue_matching_job(db: Session, playlist_id: int | None) -> Job:
         )
         .execution_options(synchronize_session=False)
     )
-    active_job = _find_active_job(db)
+    active_job = _find_active_job(db, user_id)
     if active_job is not None:
-        return _reuse_or_conflict(db, active_job, playlist_id)
+        return _reuse_or_conflict(db, active_job, user_id, playlist_id)
 
     job = Job(
         type="run_matching",
+        playlist_id=playlist_id,
+        user_id=user_id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps(
             {"playlist_id": playlist_id},
@@ -115,13 +132,13 @@ def _queue_matching_job(db: Session, playlist_id: int | None) -> Job:
         db.commit()
     except IntegrityError:
         db.rollback()
-        active_job = _find_active_job(db)
+        active_job = _find_active_job(db, user_id)
         if active_job is None:
             raise
-        return _reuse_or_conflict(db, active_job, playlist_id)
+        return _reuse_or_conflict(db, active_job, user_id, playlist_id)
     db.refresh(job)
     try:
-        run_matching_task.delay(job.id, playlist_id)
+        run_matching_task.delay(job.id, user_id, playlist_id)
         if settings.celery_task_always_eager:
             db.refresh(job)
     except Exception as exc:
@@ -142,23 +159,36 @@ def _queue_matching_job(db: Session, playlist_id: int | None) -> Job:
     response_model=JobOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def run_matching(payload: MatchingRunIn, db: Session = Depends(get_db)):
-    if payload.playlist_id is not None and db.get(Playlist, payload.playlist_id) is None:
+def run_matching(
+    payload: MatchingRunIn,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    if payload.playlist_id is not None and db.scalar(
+        select(Playlist.id).where(
+            Playlist.id == payload.playlist_id,
+            Playlist.user_id == current_user.id,
+        )
+    ) is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    return _queue_matching_job(db, payload.playlist_id)
+    return _queue_matching_job(db, current_user.id, payload.playlist_id)
 
 
 @router.get("/review", response_model=ReviewListOut)
 def review_queue(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     base = (
         select(Match, PlaylistItem, Playlist)
         .join(PlaylistItem, PlaylistItem.id == Match.playlist_item_id)
         .join(Playlist, Playlist.id == PlaylistItem.playlist_id)
-        .where(Match.status == MatchStatus.needs_review)
+        .where(
+            Match.status == MatchStatus.needs_review,
+            Playlist.user_id == current_user.id,
+        )
     )
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = db.execute(
@@ -197,10 +227,15 @@ def review_queue(
 def resolve_match(
     match_id: int,
     payload: MatchResolveIn,
+    current_user: User = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
     match = db.scalar(
-        select(Match).where(Match.id == match_id).with_for_update()
+        select(Match)
+        .join(PlaylistItem, PlaylistItem.id == Match.playlist_item_id)
+        .join(Playlist, Playlist.id == PlaylistItem.playlist_id)
+        .where(Match.id == match_id, Playlist.user_id == current_user.id)
+        .with_for_update()
     )
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found")

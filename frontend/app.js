@@ -3,6 +3,9 @@ const toast = document.querySelector("#toast");
 
 const state = {
   authenticated: false,
+  currentUser: null,
+  csrfToken: null,
+  recoveryCsrfToken: null,
   statusFilter: "ALL",
   qobuzWatchToken: 0,
   yandexWatchToken: 0,
@@ -62,10 +65,18 @@ function showToast(message, timeout = 4200) {
 }
 
 async function api(path, options = {}) {
-  const { allowUnauthorized = false, ...requestOptions } = options;
+  const {
+    allowUnauthorized = false,
+    csrfToken = state.csrfToken,
+    ...requestOptions
+  } = options;
   const headers = new Headers(requestOptions.headers || {});
+  const method = String(requestOptions.method || "GET").toUpperCase();
   if (requestOptions.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
   }
   const response = await fetch(path, {
     ...requestOptions,
@@ -74,6 +85,8 @@ async function api(path, options = {}) {
   });
   if (response.status === 401 && !allowUnauthorized) {
     state.authenticated = false;
+    state.currentUser = null;
+    state.csrfToken = null;
     renderLogin();
     throw new Error("Сессия завершена. Войдите снова.");
   }
@@ -92,6 +105,12 @@ async function api(path, options = {}) {
 }
 
 function shell(content) {
+  const ownerLinks = state.currentUser?.role === "owner" ? `
+    <a class="button ghost small" href="#/users">Пользователи</a>
+    <a class="button ghost small" href="#/storage">Хранилище</a>
+    <a class="button ghost small" href="#/providers">Провайдеры</a>
+  ` : "";
+  const identity = state.currentUser?.display_name || state.currentUser?.email || "";
   return `
     <div class="shell">
       <header class="topbar">
@@ -103,8 +122,8 @@ function shell(content) {
           </span>
         </a>
         <nav class="nav-actions" aria-label="Основная навигация">
-          <a class="button ghost small" href="#/storage">Хранилище</a>
-          <a class="button ghost small" href="#/providers">Провайдеры</a>
+          <span class="current-user" title="Текущий пользователь">${escapeHtml(identity)}</span>
+          ${ownerLinks}
           <a class="button ghost small" href="#/review">Review</a>
           <button class="ghost small" type="button" data-action="logout">Выйти</button>
         </nav>
@@ -134,40 +153,14 @@ function renderLogin(message = "") {
       <section class="login-panel">
         <p class="eyebrow">ВАША ФОНОТЕКА · БЕЗ ПОТЕРЬ</p>
         <h1>Музыка уже дома.</h1>
-        <p class="lede">Введите токен сервиса, чтобы открыть плейлисты и скачать оригинальные файлы без конвертации.</p>
-        <form id="login-form">
-          <label for="token">APP_AUTH_TOKEN</label>
-          <input id="token" name="token" type="password" autocomplete="current-password" required minlength="16" autofocus>
-          <button type="submit">Открыть архив</button>
-          <p class="form-error" role="alert">${escapeHtml(message)}</p>
-        </form>
+        <p class="lede">Войдите приглашённым Google-аккаунтом. Пароль и токены Google обрабатываются только на стороне Google.</p>
+        <a class="button google-sign-in" href="/api/auth/google/start">Войти через Google</a>
+        <p class="form-error" role="alert">${escapeHtml(message)}</p>
+        <p class="muted login-help">Нет приглашения? Обратитесь к владельцу Audiofeel.</p>
+        <a class="recovery-link" href="#/recovery">Аварийное восстановление владельца</a>
       </section>
     </main>
   `;
-}
-
-async function login(form) {
-  const button = form.querySelector("button");
-  const error = form.querySelector(".form-error");
-  button.disabled = true;
-  error.textContent = "";
-  try {
-    await api("/api/auth/login", {
-      method: "POST",
-      allowUnauthorized: true,
-      body: JSON.stringify({ token: new FormData(form).get("token") }),
-    });
-    state.authenticated = true;
-    if (window.location.hash === "#/playlists") {
-      await route();
-    } else {
-      window.location.hash = "#/playlists";
-    }
-  } catch (exception) {
-    error.textContent = exception.message;
-  } finally {
-    button.disabled = false;
-  }
 }
 
 async function logout() {
@@ -177,6 +170,244 @@ async function logout() {
     // Rendering the login page is the desired fallback even if the session expired.
   }
   state.authenticated = false;
+  state.currentUser = null;
+  state.csrfToken = null;
+  window.location.hash = "";
+  renderLogin();
+}
+
+function formatDate(value) {
+  return value ? new Date(value).toLocaleString("ru-RU") : "—";
+}
+
+function userAdminCard(user) {
+  const isCurrent = user.id === state.currentUser?.id;
+  const stateLabel = {
+    pending: "ожидает первого входа",
+    active: "активен",
+    disabled: "отключён",
+  }[user.state] || user.state;
+  return `
+    <article class="user-card">
+      <div class="provider-heading">
+        <div>
+          <span class="source-badge">${user.role === "owner" ? "owner" : "user"}</span>
+          <h2>${escapeHtml(user.display_name || user.email || "Пользователь")}</h2>
+          <p class="muted">${escapeHtml(user.email || "Приглашение владельца не настроено")}</p>
+        </div>
+        <span class="provider-state ${escapeHtml(user.state)}">${escapeHtml(stateLabel)}</span>
+      </div>
+      <dl class="user-facts">
+        <div><dt>Создан</dt><dd>${escapeHtml(formatDate(user.created_at))}</dd></div>
+        <div><dt>Первый вход</dt><dd>${escapeHtml(formatDate(user.activated_at))}</dd></div>
+        <div><dt>Последний вход</dt><dd>${escapeHtml(formatDate(user.last_login_at))}</dd></div>
+        <div><dt>Активные сессии</dt><dd>${Number(user.active_sessions || 0)}</dd></div>
+      </dl>
+      <div class="action-row">
+        <button class="ghost small" type="button" data-action="user-revoke-sessions" data-user-id="${user.id}" ${isCurrent ? "disabled title=\"Текущую сессию завершите кнопкой «Выйти»\"" : ""}>Отозвать сессии</button>
+        <button class="danger small" type="button" data-action="user-disable" data-user-id="${user.id}" ${isCurrent || user.state === "disabled" ? "disabled" : ""}>Отключить</button>
+      </div>
+    </article>
+  `;
+}
+
+async function renderUsers() {
+  loadingPage("Пользователи Audiofeel");
+  try {
+    const data = await api("/api/admin/users");
+    app.innerHTML = shell(`
+      <main>
+        <section class="page-header">
+          <div>
+            <p class="eyebrow">OWNER · ДОСТУП</p>
+            <h1>Пользователи</h1>
+            <p class="lede">Вход разрешён только заранее приглашённым Google-адресам. После первого входа учётная запись связывается со стабильным Google identity.</p>
+          </div>
+        </section>
+        <section class="card invite-card">
+          <div>
+            <h2>Создать приглашение</h2>
+            <p class="muted">Адрес должен точно совпасть с подтверждённым адресом Google при первом входе.</p>
+          </div>
+          <form id="user-invite-form">
+            <label for="invite-email">Google email</label>
+            <input id="invite-email" name="email" type="email" autocomplete="off" required maxlength="320">
+            <label for="invite-role">Роль</label>
+            <select id="invite-role" name="role">
+              <option value="user">Пользователь</option>
+              <option value="owner">Владелец</option>
+            </select>
+            <button type="submit">Пригласить</button>
+            <p class="form-error" role="alert"></p>
+          </form>
+        </section>
+        <section class="user-grid">${data.items.map(userAdminCard).join("")}</section>
+      </main>
+    `);
+  } catch (exception) {
+    if (state.authenticated) showToast(exception.message);
+  }
+}
+
+async function inviteUser(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const values = new FormData(form);
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    await api("/api/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ email: values.get("email"), role: values.get("role") }),
+    });
+    form.reset();
+    showToast("Приглашение создано");
+    await renderUsers();
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+async function disableUser(button) {
+  button.disabled = true;
+  try {
+    await api(`/api/admin/users/${button.dataset.userId}/disable`, { method: "POST" });
+    showToast("Пользователь отключён, его сессии отозваны");
+    await renderUsers();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+async function revokeUserSessions(button) {
+  button.disabled = true;
+  try {
+    await api(`/api/admin/users/${button.dataset.userId}/sessions/revoke`, { method: "POST" });
+    showToast("Все сессии пользователя отозваны");
+    await renderUsers();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+function renderRecoveryLogin(message = "") {
+  app.innerHTML = `
+    <main class="login-page">
+      <section class="login-panel recovery-panel">
+        <p class="eyebrow">OWNER RECOVERY</p>
+        <h1>Аварийное восстановление</h1>
+        <p class="lede">Этот отдельный краткоживущий контур нужен только для первоначального приглашения владельца или восстановления доступа.</p>
+        <form id="recovery-login-form" autocomplete="off">
+          <label for="recovery-token">APP_AUTH_TOKEN</label>
+          <input id="recovery-token" name="token" type="password" autocomplete="off" required minlength="16" autofocus>
+          <button type="submit">Открыть recovery</button>
+          <p class="form-error" role="alert">${escapeHtml(message)}</p>
+        </form>
+        <a class="recovery-link" href="#">Вернуться к Google Sign-In</a>
+      </section>
+    </main>
+  `;
+}
+
+async function recoveryLogin(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const token = new FormData(form).get("token");
+  form.reset();
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    const result = await api("/api/auth/recovery/login", {
+      method: "POST",
+      allowUnauthorized: true,
+      csrfToken: null,
+      body: JSON.stringify({ token }),
+    });
+    state.recoveryCsrfToken = result.csrf_token;
+    await renderRecovery();
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+async function renderRecovery() {
+  if (!state.recoveryCsrfToken) {
+    renderRecoveryLogin();
+    return;
+  }
+  try {
+    const status = await api("/api/auth/recovery/status", {
+      allowUnauthorized: true,
+      csrfToken: state.recoveryCsrfToken,
+    });
+    app.innerHTML = `
+      <main class="login-page">
+        <section class="login-panel recovery-panel">
+          <p class="eyebrow">OWNER RECOVERY · КРАТКОЖИВУЩАЯ СЕССИЯ</p>
+          <h1>${status.owner_invited ? "Восстановить владельца" : "Пригласить владельца"}</h1>
+          <p class="lede">Сохранение нового адреса отвяжет прежний Google identity и немедленно отзовёт все сессии владельца.</p>
+          <form id="recovery-owner-form" autocomplete="off">
+            <label for="recovery-owner-email">Google email владельца</label>
+            <input id="recovery-owner-email" name="email" type="email" autocomplete="off" required maxlength="320">
+            <label class="confirm-row"><input name="confirm" type="checkbox" required> Я понимаю, что прежние сессии будут отозваны</label>
+            <button class="danger" type="submit">Сбросить привязку и создать приглашение</button>
+            <p class="form-error" role="alert"></p>
+          </form>
+          <div class="action-row">
+            <button class="ghost small" type="button" data-action="recovery-revoke">Отозвать сессии владельца</button>
+            <button class="ghost small" type="button" data-action="recovery-logout">Закрыть recovery</button>
+          </div>
+        </section>
+      </main>
+    `;
+  } catch (exception) {
+    state.recoveryCsrfToken = null;
+    renderRecoveryLogin(exception.message);
+  }
+}
+
+async function updateRecoveryOwner(form) {
+  const button = form.querySelector("button[type=submit]");
+  const error = form.querySelector(".form-error");
+  const email = new FormData(form).get("email");
+  form.reset();
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    await api("/api/auth/recovery/owner-invitation", {
+      method: "POST",
+      allowUnauthorized: true,
+      csrfToken: state.recoveryCsrfToken,
+      body: JSON.stringify({ email, confirm: "RESET BOOTSTRAP OWNER" }),
+    });
+    state.recoveryCsrfToken = null;
+    showToast("Приглашение владельца сохранено. Войдите через Google.");
+    window.location.hash = "";
+    renderLogin();
+  } catch (exception) {
+    error.textContent = exception.message;
+    button.disabled = false;
+  }
+}
+
+async function recoveryAction(action) {
+  const endpoint = action === "recovery-revoke"
+    ? "/api/auth/recovery/revoke-owner-sessions"
+    : "/api/auth/recovery/logout";
+  try {
+    await api(endpoint, {
+      method: "POST",
+      allowUnauthorized: true,
+      csrfToken: state.recoveryCsrfToken,
+    });
+  } catch {
+    // The recovery session is intentionally discarded even after expiry.
+  }
+  state.recoveryCsrfToken = null;
   window.location.hash = "";
   renderLogin();
 }
@@ -468,7 +699,7 @@ function googleDriveGuide(configured) {
           <li>Откройте <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer noopener">Google Cloud Console</a>. В верхней панели выберите проект Audiofeel или создайте новый.</li>
           <li>На странице <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer noopener">Google Drive API</a> нажмите <strong>Enable</strong>. Если вместо неё показана кнопка <strong>Disable</strong>, API уже включён.</li>
           <li>Откройте <a href="https://console.cloud.google.com/auth/audience" target="_blank" rel="noreferrer noopener">Google Auth Platform → Audience</a>. Для режима <strong>Testing</strong> в блоке <strong>Test users</strong> нажмите <strong>Add users</strong> и добавьте Google-адрес каждого подключаемого аккаунта.</li>
-          <li>Откройте <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer noopener">Google Auth Platform → Clients</a>, нажмите <strong>Create client</strong> и выберите тип <strong>Web application</strong>.</li>
+          <li>Откройте <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer noopener">Google Auth Platform → Clients</a>, нажмите <strong>Create client</strong>, выберите тип <strong>Web application</strong> и назовите его <strong>Audiofeel Drive</strong>. Это отдельный client: не используйте <strong>Audiofeel Login</strong>.</li>
           <li><strong>Authorized JavaScript origins</strong> оставьте пустым. В <strong>Authorized redirect URIs</strong> нажмите <strong>Add URI</strong> и вставьте точно:<br><code>https://audiofeel.su/api/storage/google/callback</code></li>
           <li>Нажмите <strong>Create</strong>. В появившемся окне сразу скопируйте <strong>Client ID</strong> и <strong>Client secret</strong>. Google показывает полный secret только при создании — после закрытия окна его уже нельзя посмотреть.</li>
         </ol>
@@ -769,9 +1000,15 @@ async function importPlaylistUrl(form) {
 }
 
 
-function connectSpotify(button) {
+async function connectSpotify(button) {
   button.disabled = true;
-  window.location.assign("/api/sources/spotify/connect");
+  try {
+    const result = await api("/api/sources/spotify/connect", { method: "POST" });
+    window.location.assign(result.authorization_url);
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
 }
 
 
@@ -1344,13 +1581,22 @@ async function resolveCandidate(button) {
 }
 
 async function route() {
-  if (!state.authenticated) return;
+  if (window.location.hash === "#/recovery") {
+    await renderRecovery();
+    return;
+  }
+  if (!state.authenticated) {
+    renderLogin();
+    return;
+  }
   const match = window.location.hash.match(/^#\/playlist\/(\d+)$/);
   if (match) {
     await renderPlaylist(Number(match[1]));
-  } else if (window.location.hash === "#/storage") {
+  } else if (window.location.hash === "#/users" && state.currentUser?.role === "owner") {
+    await renderUsers();
+  } else if (window.location.hash === "#/storage" && state.currentUser?.role === "owner") {
     await renderStorage();
-  } else if (window.location.hash === "#/providers") {
+  } else if (window.location.hash === "#/providers" && state.currentUser?.role === "owner") {
     await renderProviders();
   } else if (window.location.hash === "#/review") {
     await renderReview();
@@ -1364,9 +1610,17 @@ async function route() {
 }
 
 app.addEventListener("submit", (event) => {
-  if (event.target.id === "login-form") {
+  if (event.target.id === "recovery-login-form") {
     event.preventDefault();
-    login(event.target);
+    recoveryLogin(event.target);
+  }
+  if (event.target.id === "recovery-owner-form") {
+    event.preventDefault();
+    updateRecoveryOwner(event.target);
+  }
+  if (event.target.id === "user-invite-form") {
+    event.preventDefault();
+    inviteUser(event.target);
   }
   if (["qobuz-credential-form", "yandex-credential-form"].includes(event.target.id)) {
     event.preventDefault();
@@ -1403,6 +1657,9 @@ app.addEventListener("click", (event) => {
   if (!button) return;
   const action = button.dataset.action;
   if (action === "logout") logout();
+  if (action === "user-disable") disableUser(button);
+  if (action === "user-revoke-sessions") revokeUserSessions(button);
+  if (["recovery-revoke", "recovery-logout"].includes(action)) recoveryAction(action);
   if (action === "match") startMatching(button);
   if (action === "qobuz-fetch") qobuzFetchMissing(button);
   if (action === "yandex-fetch") yandexFetchMissing(button);
@@ -1421,12 +1678,21 @@ app.addEventListener("click", (event) => {
 window.addEventListener("hashchange", route);
 
 async function start() {
-  try {
-    await api("/api/playlists?limit=1");
-    state.authenticated = true;
-    await route();
-  } catch (exception) {
-    if (!document.querySelector("#login-form")) renderLogin(exception.message);
+  if (window.location.hash === "#/recovery") {
+    await renderRecovery();
+  } else {
+    try {
+      const currentUser = await api("/api/auth/me", { allowUnauthorized: true });
+      state.authenticated = true;
+      state.currentUser = currentUser;
+      state.csrfToken = currentUser.csrf_token;
+      await route();
+    } catch (exception) {
+      state.authenticated = false;
+      state.currentUser = null;
+      state.csrfToken = null;
+      renderLogin(exception.message);
+    }
   }
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});

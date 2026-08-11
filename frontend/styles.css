@@ -37,6 +37,7 @@ body {
 
 button,
 input,
+select,
 a {
   font: inherit;
 }
@@ -48,6 +49,7 @@ button,
 
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 a:focus-visible {
   outline: 3px solid rgb(240 179 90 / 45%);
   outline-offset: 3px;
@@ -255,6 +257,15 @@ button[disabled] {
   min-height: 0;
   gap: 4px;
   margin-bottom: 24px;
+}
+
+.current-user {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playlist-import-card {
@@ -946,6 +957,130 @@ button[disabled] {
   color: var(--muted);
 }
 
+.provider-state.pending {
+  color: var(--review);
+}
+
+.provider-state.active {
+  color: var(--ready);
+}
+
+.provider-state.disabled {
+  color: var(--missing);
+}
+
+.google-sign-in {
+  width: 100%;
+  margin-top: 30px;
+}
+
+.login-help {
+  margin: 18px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.recovery-link {
+  display: inline-block;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.confirm-row {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.45;
+}
+
+.confirm-row input {
+  width: 18px;
+  min-height: 18px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.button.danger,
+button.danger {
+  color: #fff;
+  border-color: rgb(239 123 115 / 50%);
+  background: rgb(134 44 40 / 75%);
+}
+
+.invite-card {
+  min-height: 0;
+  margin-bottom: 22px;
+}
+
+.invite-card form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 22px;
+}
+
+.invite-card label,
+.invite-card .form-error {
+  grid-row: auto;
+}
+
+.invite-card input,
+.invite-card select {
+  min-height: 48px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--ink);
+  background: #0d1115;
+}
+
+.invite-card .form-error {
+  grid-column: 1 / -1;
+}
+
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 18px;
+}
+
+.user-card {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: linear-gradient(145deg, rgb(27 34 41 / 94%), rgb(20 25 31 / 94%));
+  box-shadow: var(--shadow);
+}
+
+.user-card h2 {
+  font-size: 30px;
+}
+
+.user-facts {
+  display: grid;
+  gap: 9px;
+  margin: 20px 0;
+}
+
+.user-facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.user-facts dt {
+  color: var(--muted);
+}
+
+.user-facts dd {
+  margin: 0;
+  text-align: right;
+}
+
 .login-page,
 .boot-screen {
   display: grid;
@@ -966,6 +1101,11 @@ button[disabled] {
 .login-panel h1,
 .boot-screen h1 {
   font-size: clamp(42px, 10vw, 68px);
+}
+
+.login-panel.recovery-panel h1 {
+  overflow-wrap: normal;
+  font-size: clamp(36px, 9vw, 54px);
 }
 
 .login-panel label {
@@ -1083,8 +1223,14 @@ button[disabled] {
 
   .storage-summary,
   .storage-config-card,
-  .storage-quota {
+  .storage-quota,
+  .invite-card form {
     grid-template-columns: 1fr;
+  }
+
+  .current-user {
+    flex-basis: 100%;
+    max-width: 100%;
   }
 }
 

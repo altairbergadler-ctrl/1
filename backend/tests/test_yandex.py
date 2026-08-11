@@ -16,6 +16,8 @@ from app.services.yandex import (
     import_yandex_playlists,
     refresh_yandex_playlist,
 )
+from app.services.user_credentials import save_user_credential
+from tests.helpers import ensure_user
 
 
 def obj(**values):
@@ -99,8 +101,11 @@ class FakeYandexClient:
 
 @pytest.fixture()
 def yandex_source(db):
-    source = PlaylistSource(service=ServiceEnum.yandex, access_token="secret-token")
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.yandex)
     db.add(source)
+    db.flush()
+    save_user_credential(db, user.id, "yandex", {"token": "secret-token"})
     db.commit()
     return source
 
@@ -308,6 +313,7 @@ def test_import_propagates_database_errors_for_celery_retry(
 def test_refresh_uses_stored_owner_and_kind(db, yandex_source):
     stored = Playlist(
         source_id=yandex_source.id,
+        user_id=yandex_source.user_id,
         external_id="42:11",
         name="Before",
         snapshot_hash="old",
@@ -340,6 +346,7 @@ def test_refresh_uses_stored_owner_and_kind(db, yandex_source):
 def test_refresh_liked_playlist_uses_liked_tracks_endpoint(db, yandex_source):
     stored = Playlist(
         source_id=yandex_source.id,
+        user_id=yandex_source.user_id,
         external_id="42:liked",
         name="Мне нравится",
         snapshot_hash="old",

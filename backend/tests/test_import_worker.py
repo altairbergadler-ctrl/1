@@ -4,21 +4,25 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.models import Job, JobStatus, Playlist, PlaylistSource, ServiceEnum
+from app.models import Job, JobScope, JobStatus, Playlist, PlaylistSource, ServiceEnum
 from app.services.spotify import SpotifyImportSummary
 from app.services.yandex import YandexImportSummary
 from app.workers.celery_app import celery
 from app.workers.tasks import PlaylistImportAllFailed, import_playlists_task
+from tests.helpers import ensure_user
 
 
 def _create_job_and_source(session_factory, service: ServiceEnum):
     session = session_factory()
-    source = PlaylistSource(service=service, access_token="provider-token")
+    user = ensure_user(session)
+    source = PlaylistSource(user_id=user.id, service=service)
     session.add(source)
     session.flush()
     job = Job(
         type="import_playlists",
         source_id=source.id,
+        user_id=user.id,
+        scope=JobScope.user,
         status=JobStatus.pending,
         payload=json.dumps({"source_id": source.id}),
     )
@@ -71,6 +75,7 @@ def test_public_spotify_url_task_imports_then_matches_one_playlist(
     job.payload = json.dumps({"source_id": source_id, "url": url})
     playlist = Playlist(
         source_id=source_id,
+        user_id=job.user_id,
         external_id="37i9dQZF1DXcBWIGoYBM5M",
         name="Public playlist",
         snapshot_hash="snapshot-public",
@@ -82,7 +87,8 @@ def test_public_spotify_url_task_imports_then_matches_one_playlist(
     calls = []
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
 
-    def import_public_playlist(db, selected_url):
+    def import_public_playlist(db, selected_url, source):
+        assert source.id == source_id
         calls.append(("import", selected_url))
         return (
             SpotifyImportSummary(discovered=1, created=1),
@@ -95,7 +101,7 @@ def test_public_spotify_url_task_imports_then_matches_one_playlist(
     )
     monkeypatch.setattr(
         "app.workers.tasks.run_matching",
-        lambda _db, *, playlist_id: calls.append(("matching", playlist_id))
+        lambda _db, _user_id, *, playlist_id: calls.append(("matching", playlist_id))
         or SimpleNamespace(to_dict=lambda: {"processed": 1}),
     )
 
@@ -240,8 +246,10 @@ def test_job_source_id_cannot_be_substituted(session_factory, monkeypatch):
 def test_yandex_refresh_task_targets_one_playlist(session_factory, monkeypatch):
     job_id, source_id = _create_job_and_source(session_factory, ServiceEnum.yandex)
     setup = session_factory()
+    job = setup.get(Job, job_id)
     playlist = Playlist(
         source_id=source_id,
+        user_id=job.user_id,
         external_id="42:7",
         name="Refresh me",
         snapshot_hash="old",
