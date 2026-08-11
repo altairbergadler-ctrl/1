@@ -798,6 +798,39 @@ def test_verify_staging_files_rejects_broken_and_non_audio(tmp_path, ffmpeg_bina
     assert reasons["empty.mp3"] == "unsupported extension"
 
 
+def test_sidecar_paths_remove_cover_art_but_preserve_unknown_rejections(
+    tmp_path, ffmpeg_binary
+):
+    staging = tmp_path / "staging"
+    album = staging / "Artist - Album"
+    album.mkdir(parents=True)
+    valid = album / "01. Song.flac"
+    _write_flac(
+        ffmpeg_binary,
+        valid,
+        frequency=440,
+        metadata={"artist": "A", "title": "T"},
+    )
+    cover = album / "cover.jpg"
+    cover.write_bytes(b"jpeg-bytes")
+    unknown = album / "notes.txt"
+    unknown.write_text("keep for inspection", encoding="utf-8")
+
+    verified = qobuz_service._sidecar_paths(
+        [
+            "Artist - Album/01. Song.flac",
+            "Artist - Album/cover.jpg",
+            "Artist - Album/notes.txt",
+        ],
+        staging,
+    )
+
+    assert verified == [valid.resolve()]
+    assert valid.exists()
+    assert not cover.exists()
+    assert unknown.exists()
+
+
 def test_import_moves_audio_and_preserves_structure(tmp_path):
     staging = tmp_path / "staging"
     library = tmp_path / "library"

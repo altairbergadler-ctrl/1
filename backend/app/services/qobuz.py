@@ -34,6 +34,7 @@ from app.services.matcher import normalize_isrc
 from app.services.normalize import normalize_album, normalize_artist, normalize_title
 
 AUDIO_EXTENSIONS = frozenset({".flac"})
+_COVER_ART_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 _EXACT_DURATION_TOLERANCE_MS = 2_000
 _FUZZY_DURATION_TOLERANCE_MS = 3_000
 _FUZZY_AUTO_THRESHOLD = 95.0
@@ -490,7 +491,21 @@ def _sidecar_paths(relative_paths: Iterable[str], staging_dir: str | Path) -> li
         if not candidate.is_relative_to(staging):
             raise QobuzProviderError("The Qobuz sidecar returned an unsafe staging path")
         paths.append(candidate)
-    verified, _rejected = verify_staging_files(paths)
+    verified, rejected = verify_staging_files(paths)
+    # The sidecar may return downloaded cover art alongside the requested
+    # audio. Covers are temporary acquisition artifacts: keep unknown rejected
+    # files for inspection, but remove known image formats inside staging.
+    for entry in rejected:
+        artifact = Path(str(entry.get("path") or "")).expanduser().resolve()
+        if (
+            artifact.is_relative_to(staging)
+            and artifact.suffix.casefold() in _COVER_ART_EXTENSIONS
+        ):
+            try:
+                artifact.unlink(missing_ok=True)
+            except OSError:
+                pass
+    _cleanup_empty_staging_dirs(staging)
     return verified
 
 
