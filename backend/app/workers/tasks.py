@@ -433,7 +433,1308 @@ def scan_library_task(self, job_id: int):
             .where(
                 Job.id == job_id,
                 Job.status.in_([JobStatus.pending, JobStatus.running]),
-                or_(Job.lock_owner.is_(N׽5��$z{-���jםlth_check_account(db, account)
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=error,
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(60, 2**self.request.retries),
+            )
+        raise
+    finally:
+        db.close()
+
+
+def _import_summary_dict(summary) -> dict:
+    if hasattr(summary, "to_dict"):
+        return summary.to_dict()
+    if hasattr(summary, "as_dict"):
+        return summary.as_dict()
+    if isinstance(summary, dict):
+        return summary
+    raise TypeError("Playlist importer returned an unsupported summary")
+
+
+@celery.task(
+    bind=True,
+    name="import_playlists",
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def import_playlists_task(
+    self,
+    job_id: int,
+    source_id: int,
+    playlist_id: int | None = None,
+    url: str | None = None,
+):
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-import-{job_id}")[:64]
+    source_lock = None
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "import_playlists",
+                Job.source_id == source_id,
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        try:
+            requested_payload = json.loads(job.payload or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Playlist import job payload is invalid") from exc
+        if not isinstance(requested_payload, dict) or requested_payload.get("url") != url:
+            raise ValueError("Playlist import job URL does not match its payload")
+
+        source_lock = _acquire_import_source_lock(db, source_id)
+        # A replacement API request may revoke this job while it waits for an
+        # older worker's source lock. Revalidate before any provider writes.
+        _renew_job_lease(db, job_id, task_id)
+
+        source = db.get(PlaylistSource, source_id)
+        if source is None:
+            raise ValueError(f"Playlist source {source_id} does not exist")
+        if job.user_id is None or source.user_id != job.user_id:
+            raise ValueError("Playlist import ownership does not match")
+        playlist = None
+        if playlist_id is not None:
+            playlist = db.get(Playlist, playlist_id)
+            if (
+                playlist is None
+                or playlist.source_id != source.id
+                or playlist.user_id != job.user_id
+            ):
+                raise ValueError("Playlist does not belong to the import source")
+
+        if source.service == ServiceEnum.spotify:
+            if url is not None:
+                summary, playlist = import_spotify_playlist_url(db, url, source)
+                playlist_id = playlist.id
+            else:
+                summary = (
+                    refresh_spotify_playlist(db, playlist)
+                    if playlist is not None
+                    else import_spotify_playlists(db, source)
+                )
+        elif source.service == ServiceEnum.yandex:
+            summary = (
+                refresh_yandex_playlist(db, playlist)
+                if playlist is not None
+                else import_yandex_playlists(db, source)
+            )
+        else:
+            raise ValueError(f"Unsupported playlist source: {source.service}")
+
+        summary_data = _import_summary_dict(summary)
+        result_status = "completed"
+        if summary_data.get("failed"):
+            successful = sum(
+                int(summary_data.get(key, 0) or 0)
+                for key in ("imported", "created", "updated", "skipped", "unchanged")
+            )
+            result_status = "partial" if successful else "failed"
+        if result_status == "failed":
+            if (
+                source.service == ServiceEnum.spotify
+                and int(summary_data.get("restricted", 0) or 0)
+                == int(summary_data.get("failed", 0) or 0)
+            ):
+                raise SpotifyAccessDeniedError(
+                    "Spotify allows importing only owned or collaborative playlists"
+                )
+            raise PlaylistImportAllFailed("All provider playlists failed")
+        acquisition_jobs = queue_source_playlists(
+            db,
+            user_id=source.user_id,
+            source_id=source.id,
+            playlist_id=playlist_id,
+            update_quality=bool(requested_payload.get("update_quality")),
+        )
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "source_id": source.id,
+                "playlist_id": playlist_id,
+                "url": url,
+                "service": source.service.value,
+                "result_status": result_status,
+                "import": summary_data,
+                "acquisition_job_ids": [item.id for item in acquisition_jobs],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        finished_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.source_id == source_id,
+                Job.status == JobStatus.running,
+                Job.lock_owner == task_id,
+            )
+            .values(
+                status=JobStatus.done,
+                payload=final_payload,
+                error=None,
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if finished_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return json.loads(final_payload)
+    except Exception as exc:
+        db.rollback()
+        retrying = (
+            not isinstance(exc, SpotifyAccessDeniedError)
+            and self.request.retries < self.max_retries
+        )
+        if isinstance(exc, SpotifyAccessDeniedError):
+            failure_message = (
+                "Spotify allows importing only owned or collaborative playlists"
+            )
+        elif retrying:
+            failure_message = (
+                f"Import attempt {self.request.retries + 1} failed "
+                f"({type(exc).__name__}); retry scheduled"
+            )
+        else:
+            failure_message = f"Playlist import failed ({type(exc).__name__})"
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "import_playlists",
+                Job.source_id == source_id,
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=failure_message,
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(120, 2**self.request.retries),
+            )
+        raise
+    finally:
+        _release_import_source_lock(source_lock, source_id)
+        db.close()
+
+
+@celery.task(
+    bind=True,
+    name="run_matching",
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def run_matching_task(
+    self,
+    job_id: int,
+    user_id: int,
+    playlist_id: int | None = None,
+):
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-matching-{job_id}")[:64]
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+        if job.user_id != user_id:
+            raise ValueError("Matching job ownership does not match")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "run_matching",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        if playlist_id is not None:
+            playlist = db.get(Playlist, playlist_id)
+            if playlist is None or playlist.user_id != user_id:
+                raise ValueError("Matching playlist ownership does not match")
+        summary = run_matching(db, user_id, playlist_id=playlist_id)
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "playlist_id": playlist_id,
+                "matching": summary.to_dict(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        finished_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == JobStatus.running,
+                Job.lock_owner == task_id,
+            )
+            .values(
+                status=JobStatus.done,
+                payload=final_payload,
+                error=None,
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if finished_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return json.loads(final_payload)
+    except Exception as exc:
+        db.rollback()
+        retrying = self.request.retries < self.max_retries
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "run_matching",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=(
+                    f"Matching attempt {self.request.retries + 1} failed "
+                    f"({type(exc).__name__}); retry scheduled"
+                    if retrying
+                    else f"Matching failed ({type(exc).__name__})"
+                ),
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(60, 2**self.request.retries),
+            )
+        raise
+    finally:
+        db.close()
+
+
+@celery.task(
+    bind=True,
+    name="qobuz_download",
+    # max_retries=2: временные сбои сети/Qobuz повторяем, но не вечно —
+    # аккаунт дороже (rate-limit/бан, assessment section 7).
+    # acks_late + reject_on_worker_lost: подтверждение после выполнения и
+    # перевыход задачи при гибели worker'а — как у остальных тасок проекта.
+    max_retries=2,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def qobuz_download_task(
+    self,
+    job_id: int,
+    mode: str,
+    playlist_id: int | None = None,
+    url: str | None = None,
+):
+    """Download from Qobuz to staging, verify, import, scan, then re-match."""
+
+    # Задание выполняет полный pipeline (ограничения RESTRICT, assessment
+    # §3.5 и §7):
+    #   staging → верификация → перенос в библиотеку → scan → matching.
+    # Скачанное НИКОГДА не пишется в MUSIC_LIBRARY_PATH напрямую: запись в
+    # библиотеку делает только worker (в docker-compose rw-mount есть лишь у
+    # него; backend работает read-only), только после верификации mutagen.
+    #
+    # Lease/heartbeat-паттерн скопирован с run_matching_task:
+    #   - старт атомарно переводит job в running и назначает lock_owner;
+    #   - _renew_job_lease обновляет heartbeat_at и payload-прогресс —
+    #     именно по heartbeat API распознаёт зависшие задания (stale-cutoff);
+    #   - если lease отобран (новый запрос погасил задание как stale),
+    #     JobLeaseLost останавливает работу без записи в чужой job.
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-qobuz-{job_id}")[:64]
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            # Повторная доставка уже завершённой задачи (acks_late): просто
+            # возвращаем сохранённый результат, ничего не выполняя заново.
+            return json.loads(job.payload or "{}")
+        if job.paused_at is not None:
+            return {
+                "status": "paused",
+                "job_id": job_id,
+            }
+        if job.user_id is None:
+            raise ValueError("Qobuz job has no owner")
+
+        started_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "qobuz_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.running,
+                error=None,
+                finished_at=None,
+                heartbeat_at=utcnow(),
+                lock_owner=task_id,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if started_id is None:
+            # Задание уже взял другой worker или его погасили как stale —
+            # этот экземпляр тихо завершается, ничего не выполняя.
+            db.rollback()
+            return {"status": "already_running", "job_id": job_id}
+        db.commit()
+        db.expire_all()
+
+        downloads: dict = {}
+        collected_files: list = []
+        if mode == "url":
+            client = create_qobuz_client(db)
+            # Режим download-url: скачать один альбом/трек по ссылке.
+            # Перед долгим сетевым этапом обновляем heartbeat и фазу, чтобы
+            # задание не выглядело зависшим для stale-cutoff.
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {"phase": "downloading", "mode": mode, "url": url},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            collected_files = download_url_to_staging(
+                client,
+                url,
+                settings.qobuz_staging_path,
+                settings.qobuz_quality,
+                settings.qobuz_embed_art,
+            )
+            downloads = {
+                "url": url,
+                "downloaded": len(collected_files),
+                "files": [str(path) for path in collected_files],
+            }
+        elif mode == "fetch_missing":
+            playlist = db.get(Playlist, playlist_id)
+            if playlist is None or playlist.user_id != job.user_id:
+                raise ValueError(f"Playlist {playlist_id} does not exist")
+
+            import_totals = {
+                "imported": [],
+                "conflicts": [],
+                "rejected": [],
+            }
+            storage_totals = {
+                "uploaded": 0,
+                "already_remote": 0,
+                "evicted": 0,
+                "already_evicted": 0,
+                "cleanup_failed": 0,
+                "missing_catalog": 0,
+                "failed": 0,
+            }
+            scan_payload = None
+            matching_payload = None
+
+            def persist_attempts(summary):
+                item_ids = [
+                    int(entry["item_id"])
+                    for entry in summary.get("items", [])
+                    if entry.get("item_id") is not None
+                ]
+                playlist_items = {
+                    item.id: item
+                    for item in db.scalars(
+                        select(PlaylistItem).where(PlaylistItem.id.in_(item_ids))
+                    )
+                }
+                record_qobuz_download_attempts(
+                    db,
+                    summary,
+                    playlist_items,
+                    job_id,
+                )
+
+            try:
+                previous_payload = json.loads(job.payload or "{}")
+            except (TypeError, json.JSONDecodeError):
+                previous_payload = {}
+            previous_phase = previous_payload.get("phase")
+            previous_reason = previous_payload.get("pause_reason")
+            previous_import = previous_payload.get("import")
+            previous_downloads = previous_payload.get("downloads")
+            needs_recovery = (
+                previous_phase in {"batch_scanning", "batch_replicating"}
+                or previous_reason in {"scan_busy", "storage_degraded"}
+            )
+            if (
+                needs_recovery
+                and isinstance(previous_import, dict)
+                and previous_import.get("imported")
+                and isinstance(previous_downloads, dict)
+            ):
+                try:
+                    scan_payload = {
+                        "status": "completed",
+                        **scan_library(db, settings.music_library_path).to_dict(),
+                    }
+                except ScanAlreadyRunning as exc:
+                    raise QobuzPauseRequested("scan_busy") from exc
+                recovery_storage = replicate_imported_files(db, previous_import)
+                for key in storage_totals:
+                    storage_totals[key] += int(
+                        recovery_storage.get(key, 0) or 0
+                    )
+                if recovery_storage.get("status") == "degraded":
+                    raise QobuzPauseRequested("storage_degraded")
+                matching_payload = run_matching(
+                    db, job.user_id, playlist_id=playlist_id
+                ).to_dict()
+                persist_attempts(previous_downloads)
+                _renew_job_lease(
+                    db,
+                    job_id,
+                    task_id,
+                    payload=json.dumps(
+                        {
+                            **previous_payload,
+                            "phase": "batch_recovered",
+                            "scan": scan_payload,
+                            "storage": recovery_storage,
+                            "matching": matching_payload,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+
+            staging_path = Path(settings.qobuz_staging_path)
+            staging_path.mkdir(parents=True, exist_ok=True)
+            if shutil.disk_usage(staging_path).free < (
+                settings.qobuz_min_free_bytes
+            ):
+                raise QobuzPauseRequested("disk_guard")
+            client = create_qobuz_client(db)
+
+            def update_download_progress(summary):
+                phase = {
+                    "paused": "batch_pause",
+                    "draining": "batch_draining",
+                }.get(summary.get("batch_state"), "downloading")
+                _renew_job_lease(
+                    db,
+                    job_id,
+                    task_id,
+                    payload=json.dumps(
+                        {
+                            "phase": phase,
+                            "mode": mode,
+                            "playlist_id": playlist_id,
+                            "downloads": summary,
+                            "import": import_totals,
+                            "storage": storage_totals,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+
+            def check_batch_boundary(_summary=None):
+                pause_requested_at = db.scalar(
+                    select(Job.pause_requested_at).where(Job.id == job_id)
+                )
+                if pause_requested_at is not None:
+                    raise QobuzPauseRequested("manual")
+                if shutil.disk_usage(settings.qobuz_staging_path).free < (
+                    settings.qobuz_min_free_bytes
+                ):
+                    raise QobuzPauseRequested("disk_guard")
+
+            def drain_completed_batch(summary, batch_files):
+                nonlocal scan_payload, matching_payload
+                import_report = import_files_to_library(
+                    batch_files,
+                    settings.qobuz_staging_path,
+                    settings.music_library_path,
+                )
+                import_totals["imported"].extend(import_report["imported"])
+                import_totals["conflicts"].extend(import_report["conflicts"])
+                import_totals["rejected"].extend(import_report["rejected"])
+                mark_downloads_stored(
+                    summary,
+                    import_report,
+                    settings.qobuz_staging_path,
+                    settings.music_library_path,
+                )
+                _renew_job_lease(
+                    db,
+                    job_id,
+                    task_id,
+                    payload=json.dumps(
+                        {
+                            "phase": "batch_scanning",
+                            "mode": mode,
+                            "playlist_id": playlist_id,
+                            "downloads": summary,
+                            "import": import_totals,
+                            "storage": storage_totals,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                try:
+                    scan_summary = scan_library(db, settings.music_library_path)
+                except ScanAlreadyRunning as exc:
+                    raise QobuzPauseRequested("scan_busy") from exc
+                scan_payload = {"status": "completed", **scan_summary.to_dict()}
+                imported_paths = import_totals.get("imported", [])
+                if imported_paths:
+                    import_totals["file_ids"] = list(
+                        db.scalars(
+                            select(File.id).where(File.path.in_(imported_paths))
+                        )
+                    )
+                _renew_job_lease(
+                    db,
+                    job_id,
+                    task_id,
+                    payload=json.dumps(
+                        {
+                            "phase": "batch_replicating",
+                            "mode": mode,
+                            "playlist_id": playlist_id,
+                            "downloads": summary,
+                            "import": import_totals,
+                            "scan": scan_payload,
+                            "storage": storage_totals,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                storage_report = replicate_imported_files(db, import_report)
+                for key in storage_totals:
+                    storage_totals[key] += int(storage_report.get(key, 0) or 0)
+                if storage_report.get("status") == "degraded":
+                    raise QobuzPauseRequested("storage_degraded")
+                matching_payload = run_matching(
+                    db, job.user_id, playlist_id=playlist_id
+                ).to_dict()
+                persist_attempts(summary)
+                _renew_job_lease(
+                    db,
+                    job_id,
+                    task_id,
+                    payload=json.dumps(
+                        {
+                            "phase": "batch_pause",
+                            "mode": mode,
+                            "playlist_id": playlist_id,
+                            "downloads": summary,
+                            "import": import_totals,
+                            "scan": scan_payload,
+                            "storage": storage_totals,
+                            "matching": matching_payload,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                check_batch_boundary()
+
+            downloads, _ = fetch_missing_tracks(
+                db,
+                playlist,
+                client,
+                progress_callback=update_download_progress,
+                job_id=job_id,
+                batch_complete_callback=drain_completed_batch,
+                before_batch_callback=check_batch_boundary,
+            )
+            final_payload = json.dumps(
+                {
+                    "phase": "completed",
+                    "mode": mode,
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                    "import": import_totals,
+                    "scan": scan_payload,
+                    "storage": storage_totals,
+                    "matching": matching_payload,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            _finish_job(db, job_id, task_id, final_payload)
+            return json.loads(final_payload)
+        else:
+            raise ValueError(f"Unsupported qobuz download mode: {mode}")
+
+        _renew_job_lease(
+            db,
+            job_id,
+            task_id,
+            payload=json.dumps(
+                {
+                    "phase": "importing",
+                    "mode": mode,
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        # Этап 2 pipeline: перенос верифицированного аудио из staging в
+        # библиотеку. Существующие файлы не перезаписываются (конфликты
+        # остаются в staging, попадают в отчёт), не-аудио отброшено ещё на
+        # верификации. Запись идёт только здесь, в worker'е (assessment section 6).
+        import_report = import_files_to_library(
+            collected_files,
+            settings.qobuz_staging_path,
+            settings.music_library_path,
+        )
+        if mode == "fetch_missing":
+            mark_downloads_stored(
+                downloads,
+                import_report,
+                settings.qobuz_staging_path,
+                settings.music_library_path,
+            )
+            item_ids = [
+                int(entry["item_id"])
+                for entry in downloads.get("items", [])
+                if entry.get("item_id") is not None
+            ]
+            playlist_items = {
+                item.id: item
+                for item in db.scalars(
+                    select(PlaylistItem).where(PlaylistItem.id.in_(item_ids))
+                )
+            }
+            record_qobuz_download_attempts(
+                db,
+                downloads,
+                playlist_items,
+                job_id,
+            )
+        _renew_job_lease(
+            db,
+            job_id,
+            task_id,
+            payload=json.dumps(
+                {
+                    "phase": "scanning",
+                    "mode": mode,
+                    "playlist_id": playlist_id,
+                    "downloads": downloads,
+                    "import": import_report,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
+        def mark_scan_lock_acquired():
+            # Скан захватил process-level блокировку библиотеки → подтверждаем
+            # lease задания перед длинным этапом (тот же приём, что в
+            # scan_library_task).
+            _claim_job_lease(db, job_id, task_id)
+
+        def update_scan_progress(summary):
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "scanning",
+                        "mode": mode,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": summary.to_dict(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+        try:
+            # Этап 3 pipeline: инлайн-скан библиотеки, чтобы новые файлы
+            # попали в каталог (треки/альбомы/Files) сразу, без ожидания
+            # ручного /api/library/scan. Блокировка скана та же, что и у
+            # обычной scan_library_task, — конкуренции двух сканов не будет.
+            scan_summary = scan_library(
+                db,
+                settings.music_library_path,
+                progress_callback=update_scan_progress,
+                lock_acquired_callback=mark_scan_lock_acquired,
+            )
+            scan_payload: dict = {"status": "completed", **scan_summary.to_dict()}
+        except ScanAlreadyRunning:
+            # Другой скан уже идёт: задание НЕ падает. Файлы уже в библиотеке
+            # и попадут в каталог тем сканом, поэтому помечаем этап deferred
+            # и пропускаем matching (матчить по неполному каталогу нельзя).
+            db.rollback()
+            scan_payload = {
+                "status": "deferred",
+                "reason": "another library scan is already running",
+            }
+
+        storage_payload = None
+        if scan_payload.get("status") == "completed":
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "replicating",
+                        "mode": mode,
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": scan_payload,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            storage_payload = replicate_imported_files(db, import_report)
+
+        matching_payload = None
+        if mode == "fetch_missing" and scan_payload.get("status") == "completed":
+            # Этап 4 pipeline (только fetch-missing): повторный матчинг
+            # плейлиста — скачанные треки должны перейти MISSING → READY.
+            _renew_job_lease(
+                db,
+                job_id,
+                task_id,
+                payload=json.dumps(
+                    {
+                        "phase": "matching",
+                        "mode": mode,
+                        "playlist_id": playlist_id,
+                        "downloads": downloads,
+                        "import": import_report,
+                        "scan": scan_payload,
+                        "storage": storage_payload,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            matching_summary = run_matching(
+                db, job.user_id, playlist_id=playlist_id
+            )
+            matching_payload = matching_summary.to_dict()
+
+        final_payload = json.dumps(
+            {
+                "phase": "completed",
+                "mode": mode,
+                "playlist_id": playlist_id,
+                "downloads": downloads,
+                "import": import_report,
+                "scan": scan_payload,
+                "storage": storage_payload,
+                "matching": matching_payload,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        _finish_job(db, job_id, task_id, final_payload)
+        return json.loads(final_payload)
+    except QobuzPauseRequested as exc:
+        db.rollback()
+        current = db.get(Job, job_id)
+        if current is None:
+            return {"status": "missing_job", "job_id": job_id}
+        try:
+            paused_payload = json.loads(current.payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            paused_payload = {}
+        paused_payload["phase"] = "paused"
+        paused_payload["pause_reason"] = str(exc)
+        current.status = JobStatus.pending
+        current.payload = json.dumps(
+            paused_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        current.error = None
+        current.finished_at = None
+        current.heartbeat_at = utcnow()
+        current.lock_owner = None
+        current.pause_requested_at = None
+        current.paused_at = utcnow()
+        db.commit()
+        return {
+            "status": "paused",
+            "job_id": job_id,
+            "reason": str(exc),
+        }
+
+    except (QobuzConfigurationError, QobuzAuthError) as exc:
+        # Credentials/configuration problems cannot be fixed by a retry.
+        #
+        # Ошибки конфигурации и авторизации завершают задание БЕЗ retry:
+        # повтор с теми же неверными креденшелами/протухшим токеном ничего не
+        # изменит, а лишние попытки логина рискуют вызвать временный бан
+        # аккаунта (assessment section 7: риск rate-limit/бан Qobuz). В error
+        # записываем только имя типа — без текстов, потенциально содержащих
+        # данные ответа провайдера.
+        db.rollback()
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.failed,
+                error=f"Qobuz download failed ({type(exc).__name__})",
+                finished_at=utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        return {"status": "failed", "job_id": job_id, "error": type(exc).__name__}
+    except JobLeaseLost:
+        # Lease отобран (задание погасили как stale или заменили): тихо
+        # останавливаемся, НЕ трогая чужой job — все дальнейшие записи
+        # выполняет владелец актуального lease.
+        db.rollback()
+        return {"status": "lease_lost", "job_id": job_id}
+    except Exception as exc:
+        # Все прочие сбои (сеть, провайдер, диск) считаются потенциально
+        # временными: стандартный retry-паттерн проекта — job возвращается в
+        # pending, Celery повторяет с backoff countdown=min(120, 2**retries),
+        # после исчерпания max_retries задание фиксируется failed.
+        db.rollback()
+        retrying = self.request.retries < self.max_retries
+        updated_id = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "qobuz_download",
+                Job.status.in_([JobStatus.pending, JobStatus.running]),
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(
+                status=JobStatus.pending if retrying else JobStatus.failed,
+                error=(
+                    f"Qobuz download attempt {self.request.retries + 1} failed "
+                    f"({type(exc).__name__}); retry scheduled"
+                    if retrying
+                    else f"Qobuz download failed ({type(exc).__name__})"
+                ),
+                finished_at=None if retrying else utcnow(),
+                heartbeat_at=utcnow(),
+                lock_owner=None,
+            )
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if updated_id is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        if retrying:
+            raise self.retry(
+                exc=exc,
+                countdown=min(120, 2**self.request.retries),
+            )
+        raise
+    finally:
+        db.close()
+
+_ACQUISITION_DISPATCH_LOCK_NAMESPACE = 20260814
+
+
+@celery.task(name="acquisition_dispatch")
+def acquisition_dispatch_task():
+    """Start at most one due batch and rotate the served user's queued jobs."""
+
+    if not settings.acquisition_enabled:
+        return {"status": "disabled"}
+    db = SessionLocal()
+    try:
+        now = utcnow()
+        if db.get_bind().dialect.name == "postgresql":
+            locked = db.scalar(
+                text(
+                    "SELECT pg_try_advisory_xact_lock(:namespace, 1)"
+                ),
+                {"namespace": _ACQUISITION_DISPATCH_LOCK_NAMESPACE},
+            )
+            if not locked:
+                db.rollback()
+                return {"status": "dispatcher_busy"}
+        stale_before = now - timedelta(
+            seconds=settings.acquisition_job_stale_seconds
+        )
+        db.execute(
+            update(Job)
+            .where(
+                Job.type == "acquisition_workflow",
+                Job.status == JobStatus.running,
+                Job.heartbeat_at < stale_before,
+            )
+            .values(
+                status=JobStatus.pending,
+                lock_owner=None,
+                next_run_at=now,
+                error="Recovered stale acquisition lease",
+            )
+            .execution_options(synchronize_session=False)
+        )
+        running = db.scalar(
+            select(Job.id).where(
+                Job.type == "acquisition_workflow",
+                Job.status == JobStatus.running,
+            )
+        )
+        if running is not None:
+            db.commit()
+            return {"status": "batch_running", "job_id": int(running)}
+        due = list(
+            db.scalars(
+                select(Job)
+                .where(
+                    Job.type == "acquisition_workflow",
+                    Job.status == JobStatus.pending,
+                    Job.paused_at.is_(None),
+                    or_(Job.next_run_at.is_(None), Job.next_run_at <= now),
+                )
+                .order_by(Job.heartbeat_at, Job.created_at, Job.id)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        if not due:
+            db.commit()
+            return {"status": "idle"}
+        # Once one user receives a batch, move all of that user's waiting jobs
+        # behind other users. This keeps a user with many playlists from
+        # monopolising the single provider/download slot.
+        job = due[0]
+        db.execute(
+            update(Job)
+            .where(
+                Job.type == "acquisition_workflow",
+                Job.user_id == job.user_id,
+                Job.status == JobStatus.pending,
+            )
+            .values(heartbeat_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        job.status = JobStatus.running
+        job.heartbeat_at = now
+        job.next_run_at = None
+        db.commit()
+        try:
+            acquisition_batch_task.apply_async(args=[job.id], queue="acquisition")
+        except Exception:
+            db.rollback()
+            current = db.get(Job, job.id)
+            if current is not None and current.status == JobStatus.running:
+                current.status = JobStatus.pending
+                current.error = "Acquisition queue is unavailable"
+                current.heartbeat_at = utcnow()
+                current.next_run_at = utcnow()
+                db.commit()
+            raise
+        return {"status": "dispatched", "job_id": job.id}
+    finally:
+        db.close()
+
+
+@celery.task(
+    bind=True,
+    name="acquisition_batch",
+    max_retries=2,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def acquisition_batch_task(self, job_id: int):
+    """Execute exactly one durable batch for the fair acquisition queue."""
+
+    db = SessionLocal()
+    task_id = str(self.request.id or f"direct-acquisition-{job_id}")[:64]
+    try:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job.status in (JobStatus.done, JobStatus.failed):
+            return json.loads(job.payload or "{}")
+        claimed = db.scalar(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.type == "acquisition_workflow",
+                Job.status == JobStatus.running,
+                or_(Job.lock_owner.is_(None), Job.lock_owner == task_id),
+            )
+            .values(lock_owner=task_id, heartbeat_at=utcnow(), error=None)
+            .returning(Job.id)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed is None:
+            db.rollback()
+            return {"status": "lease_lost", "job_id": job_id}
+        db.commit()
+        db.refresh(job)
+        payload, delay = process_acquisition_batch(db, job)
+        if delay is not None:
+            kick_acquisition_dispatcher(countdown=delay)
+        else:
+            kick_acquisition_dispatcher()
+        return payload
+    except AcquisitionPause as exc:
+        db.rollback()
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        try:
+            payload = json.loads(job.payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        payload["phase"] = "paused"
+        payload["current_stage"] = "paused"
+        payload["pause_reason"] = str(exc)
+        job.status = JobStatus.pending
+        job.payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        job.paused_at = utcnow()
+        job.pause_requested_at = None
+        job.lock_owner = None
+        job.next_run_at = None
+        job.heartbeat_at = utcnow()
+        job.error = None
+        db.commit()
+        kick_acquisition_dispatcher()
+        return {"status": "paused", "job_id": job_id, "reason": str(exc)}
+    except Exception as exc:
+        db.rollback()
+        job = db.get(Job, job_id)
+        if job is None:
+            raise
+        try:
+            payload = json.loads(job.payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        retry_count = int(payload.get("_batch_retry_count", 0) or 0) + 1
+        retrying = retry_count <= self.max_retries
+        retry_delay = min(120, 2 ** (retry_count - 1))
+        payload["_batch_retry_count"] = retry_count
+        job.status = JobStatus.pending if retrying else JobStatus.failed
+        job.error = (
+            f"Acquisition batch retry {retry_count} scheduled ({type(exc).__name__})"
+            if retrying
+            else f"Acquisition workflow failed ({type(exc).__name__})"
+        )
+        job.payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        job.lock_owner = None
+        job.heartbeat_at = utcnow()
+        job.finished_at = None if retrying else utcnow()
+        job.next_run_at = (
+            utcnow() + timedelta(seconds=retry_delay) if retrying else None
+        )
+        db.commit()
+        if retrying:
+            kick_acquisition_dispatcher(countdown=retry_delay)
+            return {"status": "retry_scheduled", "job_id": job_id}
+        kick_acquisition_dispatcher()
+        raise
+    finally:
+        db.close()
+
+
+@celery.task(name="provider_health_check")
+def provider_health_check_task(provider: str, job_id: int | None = None):
+    """Run a provider check in a worker and persist only non-sensitive results."""
+
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id) if job_id is not None else None
+        if job_id is not None and job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job is not None:
+            if job.status in (JobStatus.done, JobStatus.failed):
+                return {"status": job.status.value, "job_id": job.id}
+            job.status = JobStatus.running
+            job.heartbeat_at = utcnow()
+            db.commit()
+        snapshot = run_provider_health_check(db, provider, worker_healthy=True)
+        result = {
+            "provider": snapshot["provider"],
+            "configured": snapshot["configured"],
+            "states": {
+                component: snapshot[component]["state"]
+                for component in ("account", "provider_api", "sidecar", "worker")
+            },
+        }
+        if job is not None:
+            job.status = JobStatus.done
+            job.payload = json.dumps(result, separators=(",", ":"))
+            job.error = None
+            job.finished_at = utcnow()
+            job.heartbeat_at = utcnow()
+            db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        if job_id is not None:
+            job = db.get(Job, job_id)
+            if job is not None and job.status not in (JobStatus.done, JobStatus.failed):
+                job.status = JobStatus.failed
+                job.error = f"Provider health check failed ({type(exc).__name__})"
+                job.finished_at = utcnow()
+                job.heartbeat_at = utcnow()
+                db.commit()
+        return {"status": "failed", "provider": str(provider), "error": type(exc).__name__}
+    finally:
+        db.close()
+
+
+@celery.task(name="storage_health_check")
+def storage_health_check_task(
+    job_id: int | None = None,
+    account_id: int | None = None,
+):
+    """Check one or all Drive accounts without persisting credential material."""
+
+    db = SessionLocal()
+    try:
+        job = db.get(Job, job_id) if job_id is not None else None
+        if job_id is not None and job is None:
+            return {"status": "missing_job", "job_id": job_id}
+        if job is not None:
+            if job.status in (JobStatus.done, JobStatus.failed):
+                return {"status": job.status.value, "job_id": job.id}
+            job.status = JobStatus.running
+            job.error = None
+            job.heartbeat_at = utcnow()
+            db.commit()
+
+        query = select(StorageAccount).where(
+            StorageAccount.provider == "google_drive"
+        )
+        if account_id is not None:
+            query = query.where(StorageAccount.id == account_id)
+        else:
+            query = query.where(StorageAccount.enabled.is_(True))
+        accounts = list(db.scalars(query.order_by(StorageAccount.id)))
+        if account_id is not None and not accounts:
+            raise ValueError("Storage account does not exist")
+
+        items = []
+        for account in accounts:
+            checked = health_check_account(db, account)
             db.commit()
             items.append(
                 {
