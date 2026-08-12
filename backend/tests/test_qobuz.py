@@ -498,200 +498,993 @@ def test_fetch_missing_sweeps_every_unattempted_track_in_batches(
     db.add_all(
         [Match(playlist_item_id=item.id, status=MatchStatus.missing) for item in items]
     )
-    db.ç¾ø¶‰Ëkºwµç[İÚÙ[ˆ‹ˆŠBˆ\ÜÙ\[Ø^—ÜÙ\šXÙKš\×Ü[Ø^—ØÛÛ™šYİ\™Y
+    db.commit()
+    monkeypatch.setattr("app.config.settings.qobuz_max_tracks_per_run", 25)
+    monkeypatch.setattr("app.config.settings.qobuz_request_delay_seconds", 0)
+    monkeypatch.setattr("app.config.settings.qobuz_batch_delay_seconds", 7)
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.services.qobuz.time.sleep", sleeps.append)
+    snapshots: list[dict] = []
 
-H\È˜[ÙBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—Ú[\›˜[İÚÙ[ˆ‹ÛË\ÚÜŠBˆ\ÜÙ\[Ø^—ÜÙ\šXÙKš\×Ü[Ø^—ØÛÛ™šYİ\™Y
+    summary, files = fetch_missing_tracks(
+        db,
+        playlist,
+        FakeQobuzClient(),
+        progress_callback=lambda progress: snapshots.append(
+            json.loads(json.dumps(progress))
+        ),
+    )
 
-H\È˜[ÙB‚‚™Yˆ\İØÜ™X]WØÛY[ØÛÛ›™Xİ×İ×ÜÚYXØ\—İÚ]İ]Ü›İšY\—ÜÙXÜ™]Ê‹[ÛšÙ^\]Ú
-N‚ˆØÛÛ™šYİ\™WÜ[Ø^Š[ÛšÙ^\]Ú
-BˆØ]™WØÜ™Y[X[
-‹œ[Ø^ˆ‹ÈÚÙ[ˆˆœHˆ
-ˆÌ‹\Ù\—ÚYˆˆŸJBˆ‹˜ÛÛ[Z]
+    assert files == []
+    assert summary["total_missing"] == 53
+    assert summary["eligible_total"] == 53
+    assert summary["processed"] == 53
+    assert summary["not_found"] == 53
+    assert summary["batch_size"] == 25
+    assert summary["batch_count"] == 3
+    assert summary["current_batch"] == 3
+    assert sleeps == [7, 7]
+    assert [
+        snapshot["current_batch"]
+        for snapshot in snapshots
+        if snapshot.get("batch_state") == "paused"
+    ] == [1, 2]
+    assert db.query(ProviderAttempt).filter_by(provider="qobuz").count() == 53
 
-BˆØ[Îˆ\İÜİ—HH×B‚ˆYˆÛÛ›™Xİ
-Ù[ŠN‚ˆØ[Ë˜\[™
-Ù[‹š[\›˜[İÚÙ[ŠBˆÙ[‹›X™[H”İY[È‚ˆ™]\›ˆÈ˜ÛÛ›™XİYˆYK›X™[ˆ”İY[ÈŸB‚ˆ[ÛšÙ^\]ÚœÙ]]Š[Ø^—ÜÙ\šXÙK”[Ø^”ÚYXØ\ÛY[˜ÛÛ›™Xİ‹ÛÛ›™Xİ
-BˆÛY[H[Ø^—ÜÙ\šXÙK˜Ü™X]WÜ[Ø^—ØÛY[
-ŠB‚ˆ\ÜÙ\ÛY[›X™[OH”İY[È‚ˆ\ÜÙ\Ø[ÈOHÈ\İ\ÚYXØ\‹]ÚÙ[ˆˆ
-ˆ—Bˆ\ÜÙ\›İ\Ø]Š[Ø^—ÜÙ\šXÙKœÙ][™ÜËœ[Ø^—Ø]]İÚÙ[ˆŠB‚‚™Yˆ\İÜÚYXØ\—ÚÙ\œ›Ü—ÙÙ\×Û›İÚ[˜ÛYWÜ™\ÜÛœÙWØ›ÙJ[ÛšÙ^\]Ú
-N‚ˆØÛÛ™šYİ\™WÜ[Ø^Š[ÛšÙ^\]Ú
-B‚ˆÛ\ÜÈ™\ÜÛœÙN‚ˆİ]\×ØÛÙHHL‚ˆ^Hœ›İšY\‹]ÚÙ[‹\Úİ[[™]™\‹Y\ØØ\H‚‚ˆYˆœÛÛŠÙ[ŠN‚ˆ™]\›ˆÈ™\œ›ÜˆˆÙ[‹^B‚ˆ[ÛšÙ^\]ÚœÙ]]Š[Ø^—ÜÙ\šXÙKšœ™\]Y\İ‹[X™H
-˜\™ÜË
-ŠšİØ\™ÜÎˆ™\ÜÛœÙJ
-JBˆÛY[H[Ø^—ÜÙ\šXÙK”[Ø^”ÚYXØ\ÛY[
-ˆš‹ËÜ[Ø^‹\ÚYXØ\‹š[˜[Y‹ˆ\İ\ÚYXØ\‹]ÚÙ[ˆ‹ˆÜ™Y[X[^Èœ›İšY\ˆˆœ[Ø^ˆŸKˆ
-B‚ˆÚ]]\İœ˜Z\Ù\Ê[Ø^”›İšY\‘\œ›ÜŠH\ÈØ\\™Y‚ˆÛY[˜ÛÛ›™Xİ
+    eligibility = qobuz_download_eligibility(db, playlist)
+    assert eligibility == {
+        "total_missing": 53,
+        "eligible": 0,
+        "already_checked": 53,
+    }
 
-Bˆ\ÜÙ\œ›İšY\‹]ÚÙ[ˆˆ›İ[ˆİŠØ\\™Y˜[YJB‚‚ˆÈKKHÛÜšÙ\ˆ\ÚÈKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKB‚‚™Yˆ\İÜ[Ø^—İ\Ú×Ü]\Ù\×Ø™Y›Ü™WÙš\œİØ˜]ÚİÚ[—Ù\Ú×ÙİX\™Ú\×ÛİÊˆÙ\ÜÚ[Û—Ù˜XİÜK[ÛšÙ^\]Ú\Ü]ŠN‚ˆİYÚ[™ÈH\Ü]ÈœİYÚ[™È‚ˆİYÚ[™Ë›ZÙ\Š
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—ÜİYÚ[™×Ü]‹İŠİYÚ[™ÊJBˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—ÛZ[—Ùœ™YWØ]\È‹ˆL
-ˆL
-ˆL
-ˆLˆ
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË”Ù\ÜÚ[Û“ØØ[‹Ù\ÜÚ[Û—Ù˜XİÜJB‚ˆÙ\ÜÚ[ÛˆHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ\Ù\ˆH[œİ\™Wİ\Ù\ŠÙ\ÜÚ[ÛŠBˆÛİ\˜ÙHH^[\İÛİ\˜ÙJ\Ù\—ÚY]\Ù\‹šYÙ\šXÙOTÙ\šXÙQ[[KœÜİYJBˆ^[\İH^[\İ
-ˆÛİ\˜ÙO\Ûİ\˜ÙKˆ\Ù\—ÚY]\Ù\‹šYˆ^\›˜[ÚYH™\ÚËYİX\™‹ˆ˜[YOH‘\ÚÈİX\™‹ˆ
-BˆÙ\ÜÚ[Û‹˜YØ[
-ÜÛİ\˜ÙK^[\İJBˆÙ\ÜÚ[Û‹™›\Ú
 
-Bˆ›ØˆH›ØŠˆ\OHœ[Ø^—ÙİÛ›ØY‹ˆ^[\İÚY\^[\İšYˆ\Ù\—ÚY]\Ù\‹šYˆØÛÜOR›Ø”ØÛÜK\Ù\‹ˆİ]\ÏR›Ø”İ]\Ëœ[™[™Ëˆ^[ØYZœÛÛ‹™[\ÊˆÈ›[ÙHˆ™™]ÚÛZ\ÜÚ[™È‹œ^[\İÚYˆ^[\İšYBˆ
-Kˆ
-BˆÙ\ÜÚ[Û‹˜Y
-›ØŠBˆÙ\ÜÚ[Û‹˜ÛÛ[Z]
+# --- job creation -----------------------------------------------------------------
 
-Bˆ›Ø—ÚY^[\İÚYH›Ø‹šY^[\İšYˆÙ\ÜÚ[Û‹˜ÛÜÙJ
-B‚ˆYˆ[™^XİYØÛY[
-ÙŠN‚ˆ˜Z\ÙH\ÜÙ\[Û‘\œ›ÜŠœ›İšY\ˆ]\İ›İİ\Ú[H\ÚÈİX\™\ÈXİ]™HŠB‚ˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜË˜Ü™X]WÜ[Ø^—ØÛY[‹ˆ[™^XİYØÛY[ˆ
-B‚ˆ™\İ[H[Ø^—ÙİÛ›ØYİ\ÚËœ[Šˆ›Ø—ÚY™™]ÚÛZ\ÜÚ[™È‹^[\İÚY\^[\İÚYˆ
-B‚ˆÚXÚÈHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ]\ÙYÚ›ØˆHÚXÚË™Ù]
-›Ø‹›Ø—ÚY
-Bˆ\ÜÙ\™\İ[OHÂˆœİ]\Èˆœ]\ÙY‹ˆš›Ø—ÚYˆ›Ø—ÚYˆœ™X\ÛÛˆˆ™\Ú×ÙİX\™‹ˆBˆ\ÜÙ\]\ÙYÚ›Ø‹œİ]\ÈOH›Ø”İ]\Ëœ[™[™Âˆ\ÜÙ\]\ÙYÚ›Ø‹œ]\ÙYØ]\È›İ›Û™Bˆ\ÜÙ\]\ÙYÚ›Ø‹›ØÚ×ÛİÛ™\ˆ\È›Û™BˆÚXÚË˜ÛÜÙJ
-B‚‚™Yˆ\İÜ[Ø^—Ü™\İ[YWÙ˜Z[œ×Ú[\œ\YØ˜]ÚØ™Y›Ü™WÜ›İšY\ŠˆÙ\ÜÚ[Û—Ù˜XİÜK[ÛšÙ^\]Ú\Ü]ŠN‚ˆİYÚ[™ÈH\Ü]ÈœİYÚ[™È‚ˆXœ˜\HH\Ü]È›Xœ˜\H‚ˆİYÚ[™Ë›ZÙ\Š
-BˆXœ˜\K›ZÙ\Š
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—ÜİYÚ[™×Ü]‹İŠİYÚ[™ÊJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜË›]\ÚX×ÛXœ˜\WÜ]‹İŠXœ˜\JJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—ÛZ[—Ùœ™YWØ]\È‹
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË”Ù\ÜÚ[Û“ØØ[‹Ù\ÜÚ[Û—Ù˜XİÜJB‚ˆÙ\ÜÚ[ÛˆHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ\Ù\ˆH[œİ\™Wİ\Ù\ŠÙ\ÜÚ[ÛŠBˆÛİ\˜ÙHH^[\İÛİ\˜ÙJ\Ù\—ÚY]\Ù\‹šYÙ\šXÙOTÙ\šXÙQ[[KœÜİYJBˆ^[\İH^[\İ
-ˆÛİ\˜ÙO\Ûİ\˜ÙKˆ\Ù\—ÚY]\Ù\‹šYˆ^\›˜[ÚYHœ™XÛİ™\‹Y˜Z[ˆ‹ˆ˜[YOH”™XÛİ™\ˆ˜Z[ˆ‹ˆ
-BˆÙ\ÜÚ[Û‹˜YØ[
-ÜÛİ\˜ÙK^[\İJBˆÙ\ÜÚ[Û‹™›\Ú
 
-Bˆ›ØˆH›ØŠˆ\OHœ[Ø^—ÙİÛ›ØY‹ˆ^[\İÚY\^[\İšYˆ\Ù\—ÚY]\Ù\‹šYˆØÛÜOR›Ø”ØÛÜK\Ù\‹ˆİ]\ÏR›Ø”İ]\Ëœ[™[™Ëˆ^[ØYZœÛÛ‹™[\ÊˆÂˆœ\ÙHˆœ]\ÙY‹ˆœ]\ÙWÜ™X\ÛÛˆˆœİÜ˜YÙWÙYÜ˜YY‹ˆ›[ÙHˆ™™]ÚÛZ\ÜÚ[™È‹ˆœ^[\İÚYˆ^[\İšYˆ™İÛ›ØYÈˆÈš][\Èˆ×_Kˆš[\ÜˆÂˆš[\ÜYˆÜİŠXœ˜\HÈœ[™[™Ë™›XÈŠWKˆ˜ÛÛ™›XİÈˆ×Kˆœ™Z™XİYˆ×KˆKˆBˆ
-Kˆ
-BˆÙ\ÜÚ[Û‹˜Y
-›ØŠBˆÙ\ÜÚ[Û‹˜ÛÛ[Z]
+def test_download_url_creates_single_active_job(
+    api_client, auth_headers, db, monkeypatch
+):
+    _configure_qobuz(monkeypatch)
+    queued: list[tuple] = []
+    monkeypatch.setattr(
+        "app.api.qobuz.qobuz_download_task.delay",
+        lambda *args: queued.append(args),
+    )
 
-Bˆ›Ø—ÚY^[\İÚYH›Ø‹šY^[\İšYˆÙ\ÜÚ[Û‹˜ÛÜÙJ
-B‚ˆÜ™\ˆ\İÜİ—HH×Bˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜËœØØ[—ÛXœ˜\H‹ˆ[X™H
-—Ø\™ÜË
-Š—ÚİØ\™ÜÎˆ
-ˆÜ™\‹˜\[™
-œØØ[ˆŠBˆÜˆÚ[\S˜[Y\ÜXÙJ×ÙXİ[[X™NˆÈ™\ØÛİ™\™Yˆ_JBˆ
-Kˆ
-Bˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜËœ™\XØ]WÚ[\ÜYÙš[\È‹ˆ[X™H
-—Ø\™ÜÎˆ
-ˆÜ™\‹˜\[™
-œ™\XØ]HŠBˆÜˆÈœİ]\Èˆ˜ÛÛ\]Y‹\ØYYˆK™]šXİYˆ_Bˆ
-Kˆ
-Bˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜËœ[—ÛX]Ú[™È‹ˆ[X™H
-—Ø\™ÜË
-Š—ÚİØ\™ÜÎˆ
-ˆÜ™\‹˜\[™
-›X]Ú[™ÈŠBˆÜˆÚ[\S˜[Y\ÜXÙJ×ÙXİ[[X™NˆÈœ™XYHˆK›Z\ÜÚ[™ÈˆJBˆ
-Kˆ
-Bˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜË˜Ü™X]WÜ[Ø^—ØÛY[‹ˆ[X™HÙˆÜ™\‹˜\[™
-œ›İšY\ˆŠHÜˆ˜ZÙT[Ø^ÛY[
+    url = "https://play.qobuz.com/track/123"
+    first = api_client.post(
+        "/api/qobuz/download-url", json={"url": url}, headers=auth_headers
+    )
+    duplicate = api_client.post(
+        "/api/qobuz/download-url", json={"url": url}, headers=auth_headers
+    )
 
-Kˆ
-Bˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜË™™]ÚÛZ\ÜÚ[™×İ˜XÚÜÈ‹ˆ[X™H
-—Ø\™ÜË
-Š—ÚİØ\™ÜÎˆ
-Èš][\Èˆ×Kœ›ØÙ\ÜÙYˆK×JKˆ
-B‚ˆ™\İ[H[Ø^—ÙİÛ›ØYİ\ÚËœ[Šˆ›Ø—ÚY™™]ÚÛZ\ÜÚ[™È‹^[\İÚY\^[\İÚYˆ
-B‚ˆ\ÜÙ\Ü™\ˆOHÈœØØ[ˆ‹œ™\XØ]H‹›X]Ú[™È‹œ›İšY\ˆ—Bˆ\ÜÙ\™\İ[Èœ\ÙH—HOH˜ÛÛ\]Y‚ˆ\ÜÙ\™\İ[ÈœØØ[ˆ—VÈœİ]\È—HOH˜ÛÛ\]Y‚ˆ\ÜÙ\™\İ[È›X]Ú[™È—VÈœ™XYH—HOHB‚‚™YˆØÜ™X]WÜ[Ø^—Ú›ØŠÙ\ÜÚ[Û—Ù˜XİÜK^[\İS›Û™K[ÙOH™™]ÚÛZ\ÜÚ[™ÈŠN‚ˆÙ\ÜÚ[ÛˆHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ\Ù\ˆH[œİ\™Wİ\Ù\ŠÙ\ÜÚ[ÛŠBˆ^[\İÚYH›Û™BˆYˆ^[\İ\È›İ›Û™N‚ˆÙ\ÜÚ[Û‹˜Y
-^[\İœÛİ\˜ÙJBˆÙ\ÜÚ[Û‹˜Y
-^[\İ
-BˆÙ\ÜÚ[Û‹™›\Ú
+    assert first.status_code == 202
+    assert duplicate.status_code == 202
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert len(queued) == 1
+    job_id, mode, playlist_id, queued_url = queued[0]
+    assert (job_id, mode, playlist_id, queued_url) == (
+        first.json()["id"],
+        "url",
+        None,
+        url,
+    )
+    job = db.get(Job, first.json()["id"])
+    assert job.type == "qobuz_download"
+    assert json.loads(job.payload)["mode"] == "url"
 
-Bˆ^[\İÚYH^[\İšYˆ›ØˆH›ØŠˆ\OHœ[Ø^—ÙİÛ›ØY‹ˆ^[\İÚY\^[\İÚYˆ\Ù\—ÚY]\Ù\‹šYˆØÛÜOR›Ø”ØÛÜK\Ù\‹ˆİ]\ÏR›Ø”İ]\Ëœ[™[™Ëˆ^[ØYZœÛÛ‹™[\ÊÈ›[ÙHˆ[ÙKœ^[\İÚYˆ^[\İÚYJKˆ
-BˆÙ\ÜÚ[Û‹˜Y
-›ØŠBˆÙ\ÜÚ[Û‹˜ÛÛ[Z]
 
-Bˆ™\İ[H›Ø‹šY^[\İÚYˆÙ\ÜÚ[Û‹˜ÛÜÙJ
-Bˆ™]\›ˆ™\İ[‚‚™Yˆ\İÜ[Ø^—İ\Ú×Ù˜Z[×İÚ]İ]Ü™]WÛÛ—ØÛÛ™šYİ\˜][Û—Ù\œ›ÜŠˆÙ\ÜÚ[Û—Ù˜XİÜK[ÛšÙ^\]ÚŠN‚ˆ›Ø—ÚYÈHØÜ™X]WÜ[Ø^—Ú›ØŠÙ\ÜÚ[Û—Ù˜XİÜK[ÙOH\›ŠBˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË”Ù\ÜÚ[Û“ØØ[‹Ù\ÜÚ[Û—Ù˜XİÜJB‚ˆYˆ˜Z\ÙWØÛÛ™šYÊÙŠN‚ˆ˜Z\ÙH[Ø^ÛÛ™šYİ\˜][Û‘\œ›ÜŠ››İÛÛ™šYİ\™YŠB‚ˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË˜Ü™X]WÜ[Ø^—ØÛY[‹˜Z\ÙWØÛÛ™šYÊB‚ˆ™\İ[H[Ø^—ÙİÛ›ØYİ\ÚËœ[Šˆ›Ø—ÚY\›‹\›HšÎ‹ËÜ^Kœ[Ø^‹˜ÛÛKİ˜XÚËÌH‚ˆ
-B‚ˆÚXÚÈHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ›ØˆHÚXÚË™Ù]
-›Ø‹›Ø—ÚY
-Bˆ\ÜÙ\™\İ[Èœİ]\È—HOH™˜Z[Y‚ˆ\ÜÙ\›Ø‹œİ]\ÈOH›Ø”İ]\Ë™˜Z[Yˆ\ÜÙ\›Ø‹™\œ›ÜˆOH”[Ø^ˆİÛ›ØY˜Z[Y
-[Ø^ÛÛ™šYİ\˜][Û‘\œ›ÜŠH‚ˆ\ÜÙ\›Ø‹™š[š\ÚYØ]\È›İ›Û™BˆÚXÚË˜ÛÜÙJ
-B‚‚™Yˆ\İÜ[Ø^—Ù™]ÚÛZ\ÜÚ[™×Ù[™İ×Ù[™
-ˆÙ\ÜÚ[Û—Ù˜XİÜK[ÛšÙ^\]Ú\Ü]™›\Y×Øš[˜\BŠN‚ˆİYÚ[™ÈH\Ü]ÈœİYÚ[™È‚ˆXœ˜\HH\Ü]È›Xœ˜\H‚ˆXœ˜\K›ZÙ\Š
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—ÜİYÚ[™×Ü]‹İŠİYÚ[™ÊJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜË›]\ÚX×ÛXœ˜\WÜ]‹İŠXœ˜\JJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—Ü™\]Y\İÙ[^WÜÙXÛÛ™È‹
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜË›]\ÚXØœ˜Z[—Ù[˜X›Y‹˜[ÙJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœİÜ˜YÙWÜš[X\WØ˜XÚÙ[™‹›ØØ[ŠB‚ˆÙ\ÜÚ[ÛˆHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ\Ù\ˆH[œİ\™Wİ\Ù\ŠÙ\ÜÚ[ÛŠBˆÛİ\˜ÙHH^[\İÛİ\˜ÙJ\Ù\—ÚY]\Ù\‹šYÙ\šXÙOTÙ\šXÙQ[[KœÜİYJBˆ^[\İH^[\İ
-ˆÛİ\˜ÙO\Ûİ\˜ÙKˆ\Ù\—ÚY]\Ù\‹šYˆ^\›˜[ÚYHœ[Ø^‹\‹ˆ˜[YOH”[Ø^ˆ^[\İ‹ˆ
-Bˆ˜XÚÜÈHÂˆ
-•YÙÙY\\İ‹‘š\œİ˜XÚÈ‹•YÙÙY[[HŠKˆ
-•YÙÙY\\İ‹”ÙXÛÛ™˜XÚÈ‹•YÙÙY[[HŠKˆBˆ][\ÈH×Bˆ›ÜˆÜÚ][Û‹
-\\İ]K[[JH[ˆ[[Y\˜]J˜XÚÜÊN‚ˆ][HH^[\İ][Jˆ^[\İ\^[\İˆÜÚ][Û\ÜÚ][Û‹ˆ\\İÜ˜]ÏX\\İˆ]WÜ˜]Ï]]Kˆ[[WÜ˜]ÏX[[Kˆ\\İÛ›Ü›O[›Ü›X[^™WØ\\İ
-\\İ
-Kˆ]WÛ›Ü›O[›Ü›X[^™Wİ]J]JKˆ[[WÛ›Ü›O[›Ü›X[^™WØ[[J[[JKˆ
-Bˆ][\Ë˜\[™
-][JBˆÈS“PUÒQ][HÚ]İ]HX]Ú›İÈ]\İ™HYÛ›Ü™YH™]Ú[Z\ÜÚ[™Ë‚ˆ[›X]ÚYH^[\İ][Jˆ^[\İ\^[\İˆÜÚ][ÛL‹ˆ\\İÜ˜]ÏH•YÙÙY\\İ‹ˆ]WÜ˜]ÏH•\™˜XÚÈ‹ˆ[[WÜ˜]ÏH•YÙÙY[[H‹ˆ\\İÛ›Ü›O[›Ü›X[^™WØ\\İ
-•YÙÙY\\İŠKˆ]WÛ›Ü›O[›Ü›X[^™Wİ]J•\™˜XÚÈŠKˆ[[WÛ›Ü›O[›Ü›X[^™WØ[[J•YÙÙY[[HŠKˆ
-BˆÙ\ÜÚ[Û‹˜YØ[
-ÜÛİ\˜ÙK^[\İ
-š][\Ë[›X]ÚYJBˆÙ\ÜÚ[Û‹™›\Ú
+def test_conflicting_qobuz_request_returns_409(
+    api_client, auth_headers, monkeypatch
+):
+    _configure_qobuz(monkeypatch)
+    monkeypatch.setattr("app.api.qobuz.qobuz_download_task.delay", lambda *args: None)
 
-Bˆ›Üˆ][H[ˆ][\Î‚ˆÙ\ÜÚ[Û‹˜Y
-ˆX]Ú
-ˆ^[\İÚ][WÚYZ][KšYˆİ]\ÏSX]Úİ]\Ë›Z\ÜÚ[™ËˆÛÛ™šY[˜ÙOLŒˆY]ÙH››Û™H‹ˆ
-Bˆ
-Bˆ›ØˆH›ØŠˆ\OHœ[Ø^—ÙİÛ›ØY‹ˆ^[\İÚY\^[\İšYˆ\Ù\—ÚY]\Ù\‹šYˆØÛÜOR›Ø”ØÛÜK\Ù\‹ˆİ]\ÏR›Ø”İ]\Ëœ[™[™Ëˆ^[ØYZœÛÛ‹™[\ÊÈ›[ÙHˆ™™]ÚÛZ\ÜÚ[™È‹œ^[\İÚYˆ^[\İšYJKˆ
-BˆÙ\ÜÚ[Û‹˜Y
-›ØŠBˆÙ\ÜÚ[Û‹˜ÛÛ[Z]
+    first = api_client.post(
+        "/api/qobuz/download-url",
+        json={"url": "https://play.qobuz.com/track/123"},
+        headers=auth_headers,
+    )
+    conflict = api_client.post(
+        "/api/qobuz/download-url",
+        json={"url": "https://play.qobuz.com/track/456"},
+        headers=auth_headers,
+    )
 
-Bˆ›Ø—ÚY^[\İÚYH›Ø‹šY^[\İšYˆÙ\ÜÚ[Û‹˜ÛÜÙJ
-B‚ˆ˜ZÙWØÛY[H˜ZÙT[Ø^ÛY[
-ˆ˜XÚÜÏVÂˆİ˜XÚ×Ü^[ØY
-LK‘š\œİ˜XÚÈŠKˆİ˜XÚ×Ü^[ØY
-L‹”ÙXÛÛ™˜XÚÈŠKˆİ˜XÚ×Ü^[ØY
-LË•\™˜XÚÈŠKˆBˆ
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË”Ù\ÜÚ[Û“ØØ[‹Ù\ÜÚ[Û—Ù˜XİÜJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË˜Ü™X]WÜ[Ø^—ØÛY[‹[X™HÙˆ˜ZÙWØÛY[
-B‚ˆYˆ˜ZÙWÙİÛ›ØY
-ÛY[˜XÚ×ÚYİYÚ[™×Ù\‹]X[]K[X™YØ\
-N‚ˆ]\ÈHÈŒLHˆ‘š\œİ˜XÚÈ‹ŒLˆˆ”ÙXÛÛ™˜XÚÈ‹ŒLÈˆ•\™˜XÚÈŸBˆ]HH]\ÖÜİŠ˜XÚ×ÚY
-WBˆ\™Ù]H
-ˆ]
-İYÚ[™×Ù\ŠBˆÈ•YÙÙY\\İHYÙÙY[[H
-Œ
-HÌ‹NMšÒ—H‚ˆÈˆİ]_K™›XÈ‚ˆ
-BˆİÜš]WÙ›XÊˆ™›\Y×Øš[˜\Kˆ\™Ù]ˆœ™\]Y[˜ŞOMYˆ]HOH‘š\œİ˜XÚÈˆ[ÙHMLˆY]Y]O^Âˆ˜\\İˆ•YÙÙY\\İ‹ˆ˜[[Hˆ•YÙÙY[[H‹ˆ]Hˆ]Kˆ™]HˆŒŒ‹ˆKˆ
-Bˆ™]\›ˆİ\™Ù]B‚ˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\œÙ\šXÙ\Ëœ[Ø^‹™İÛ›ØYİ˜XÚ×İ×ÜİYÚ[™È‹˜ZÙWÙİÛ›ØYˆ
-B‚ˆ™\İ[H[Ø^—ÙİÛ›ØYİ\ÚËœ[Šˆ›Ø—ÚY™™]ÚÛZ\ÜÚ[™È‹^[\İÚY\^[\İÚYˆ
-B‚ˆ\ÜÙ\™\İ[Èœ\ÙH—HOH˜ÛÛ\]Y‚ˆ\ÜÙ\™\İ[È™İÛ›ØYÈ—VÈİ[ÛZ\ÜÚ[™È—HOH‚ˆ\ÜÙ\™\İ[È™İÛ›ØYÈ—VÈ™İÛ›ØYY—HOH‚ˆ\ÜÙ\™\İ[È™İÛ›ØYÈ—VÈœ›ØÙ\ÜÙY—HOH‚ˆ\ÜÙ\™\İ[È™İÛ›ØYÈ—VÈœİÜ™Y—HOH‚ˆ\ÜÙ\Ú][VÈœİ]\È—H›Üˆ][H[ˆ™\İ[È™İÛ›ØYÈ—VÈš][\È—_HOHÈœİÜ™YŸBˆ\ÜÙ\™\İ[È™İÛ›ØYÈ—VÈ™˜Z[Y—HOHˆ\ÜÙ\[Š™\İ[Èš[\Ü—VÈš[\ÜY—JHOH‚ˆ\ÜÙ\™\İ[ÈœØØ[ˆ—VÈœİ]\È—HOH˜ÛÛ\]Y‚ˆ\ÜÙ\™\İ[ÈœØØ[ˆ—VÈ˜YY—HOH‚ˆ\ÜÙ\™\İ[È›X]Ú[™È—VÈœ™XYH—HOH‚ˆ\ÜÙ\™\İ[È›X]Ú[™È—VÈ›Z\ÜÚ[™È—HOHHÈH[İXÚYS“PUÒQ][B‚ˆ[\ÜYHÔ]
-]
-H›Üˆ][ˆ™\İ[Èš[\Ü—VÈš[\ÜY—WBˆ\ÜÙ\[
-]š\×Ùš[J
-H›Üˆ][ˆ[\ÜY
-Bˆ\ÜÙ\[
-Xœ˜\Kœ™\ÛÛ™J
-H[ˆ]œ™\ÛÛ™J
-Kœ\™[È›Üˆ][ˆ[\ÜY
-Bˆ\ÜÙ\›İ\İ
-İYÚ[™Ëœ™ÛØŠŠ‹™›XÈŠJB‚ˆÚXÚÈHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ›ØˆHÚXÚË™Ù]
-›Ø‹›Ø—ÚY
-Bˆ\ÜÙ\›Ø‹œİ]\ÈOH›Ø”İ]\Ë™Û™Bˆ\ÜÙ\›Ø‹›ØÚ×ÛİÛ™\ˆ\È›Û™BˆX]Ú\ÈHÚXÚËœØØ[\œÊˆÙ[Xİ
-X]Ú
-Bˆš›Ú[Š^[\İ][K^[\İ][KšYOHX]Úœ^[\İÚ][WÚY
-BˆÚ\™J^[\İ][Kœ^[\İÚYOH^[\İÚY
-Bˆ
-K˜[
+    assert first.status_code == 202
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == "Another Qobuz download is already running"
 
-Bˆİ]\Ù\ÈHÛX]Úœİ]\È›ÜˆX]Ú[ˆX]Ú\×Bˆ\ÜÙ\İ]\Ù\Ë˜Ûİ[
-X]Úİ]\Ëœ™XYJHOH‚ˆ\ÜÙ\İ]\Ù\Ë˜Ûİ[
-X]Úİ]\Ë›Z\ÜÚ[™ÊHOHBˆ™XYWÛX]Ú\ÈHÛH›ÜˆH[ˆX]Ú\ÈYˆKœİ]\ÈOHX]Úİ]\Ëœ™XYWBˆ\ÜÙ\[
-X]Ú˜XÚ×ÚY\È›İ›Û™H›ÜˆX]Ú[ˆ™XYWÛX]Ú\ÊBˆ][\ÈHÚXÚËœØØ[\œÊˆÙ[Xİ
-›İšY\][\
-KÚ\™J›İšY\][\œ›İšY\ˆOHœ[Ø^ˆŠBˆ
-K˜[
 
-Bˆ\ÜÙ\[Š][\ÊHOH‚ˆ\ÜÙ\Ø][\œİ]\È›Üˆ][\[ˆ][\ßHOHÈœİÜ™YŸBˆÚXÚË˜ÛÜÙJ
-B‚‚™Yˆ\İÜ[Ø^—İ\›İ\Ú×ÙİÛ›ØY×Ú[\Ü×Ø[™ÜØØ[œÊˆÙ\ÜÚ[Û—Ù˜XİÜK[ÛšÙ^\]Ú\Ü]™›\Y×Øš[˜\BŠN‚ˆİYÚ[™ÈH\Ü]ÈœİYÚ[™È‚ˆXœ˜\HH\Ü]È›Xœ˜\H‚ˆXœ˜\K›ZÙ\Š
-Bˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜËœ[Ø^—ÜİYÚ[™×Ü]‹İŠİYÚ[™ÊJBˆ[ÛšÙ^\]ÚœÙ]]Š˜\˜ÛÛ™šYËœÙ][™ÜË›]\ÚX×ÛXœ˜\WÜ]‹İŠXœ˜\JJB‚ˆ›Ø—ÚYÈHØÜ™X]WÜ[Ø^—Ú›ØŠÙ\ÜÚ[Û—Ù˜XİÜK[ÙOH\›ŠBˆ[ÛšÙ^\]ÚœÙ]]Š˜\ÛÜšÙ\œË\ÚÜË”Ù\ÜÚ[Û“ØØ[‹Ù\ÜÚ[Û—Ù˜XİÜJBˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜË˜Ü™X]WÜ[Ø^—ØÛY[‹[X™HÙˆ˜ZÙT[Ø^ÛY[
+def test_fetch_missing_validates_playlist_and_reuses_active_job(
+    api_client, auth_headers, db, monkeypatch
+):
+    _configure_qobuz(monkeypatch)
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(source=source, user_id=user.id, external_id="p1", name="Playlist")
+    db.add_all([source, playlist])
+    db.commit()
+    queued: list[tuple] = []
+    monkeypatch.setattr(
+        "app.api.qobuz.qobuz_download_task.delay",
+        lambda *args: queued.append(args),
+    )
 
-Bˆ
-B‚ˆYˆ˜ZÙWİ\›ÙİÛ›ØY
-ÛY[\›İYÚ[™×Ù\‹]X[]K[X™YØ\
-N‚ˆ\™Ù]H]
-İYÚ[™×Ù\ŠHÈ\\İH[[H
-Œ
-HÌ‹NMšÒ—HˆÈ”ÛÛ™Ë™›XÈ‚ˆİÜš]WÙ›XÊˆ™›\Y×Øš[˜\Kˆ\™Ù]ˆœ™\]Y[˜ŞOMˆY]Y]O^È˜\\İˆ\\İ‹˜[[Hˆ[[H‹]Hˆ”ÛÛ™ÈŸKˆ
-Bˆ™]\›ˆİ\™Ù]B‚ˆ[ÛšÙ^\]ÚœÙ]]Šˆ˜\ÛÜšÙ\œË\ÚÜË™İÛ›ØYİ\›İ×ÜİYÚ[™È‹˜ZÙWİ\›ÙİÛ›ØYˆ
-B‚ˆ™\İ[H[Ø^—ÙİÛ›ØYİ\ÚËœ[Šˆ›Ø—ÚY\›‹\›HšÎ‹ËÜ^Kœ[Ø^‹˜ÛÛKØ[[KØX˜ÌLŒÈ‚ˆ
-B‚ˆ\ÜÙ\™\İ[Èœ\ÙH—HOH˜ÛÛ\]Y‚ˆ\ÜÙ\™\İ[È›[ÙH—HOH\›‚ˆ\ÜÙ\™\İ[È™İÛ›ØYÈ—VÈ™İÛ›ØYY—HOHBˆ\ÜÙ\[Š™\İ[Èš[\Ü—VÈš[\ÜY—JHOHBˆ\ÜÙ\™\İ[ÈœØØ[ˆ—VÈ˜YY—HOHBˆ\ÜÙ\™\İ[È›X]Ú[™È—H\È›Û™B‚ˆÚXÚÈHÙ\ÜÚ[Û—Ù˜XİÜJ
-Bˆ›ØˆHÚXÚË™Ù]
-›Ø‹›Ø—ÚY
-Bˆ\ÜÙ\›Ø‹œİ]\ÈOH›Ø”İ]\Ë™Û™BˆÚXÚË˜ÛÜÙJ
-B
+    missing_playlist = api_client.post(
+        "/api/qobuz/fetch-missing", json={"playlist_id": 9999}, headers=auth_headers
+    )
+    first = api_client.post(
+        "/api/qobuz/fetch-missing",
+        json={"playlist_id": playlist.id},
+        headers=auth_headers,
+    )
+    duplicate = api_client.post(
+        "/api/qobuz/fetch-missing",
+        json={"playlist_id": playlist.id},
+        headers=auth_headers,
+    )
+
+    assert missing_playlist.status_code == 404
+    assert first.status_code == 202
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert len(queued) == 1
+    assert queued[0][1:] == ("fetch_missing", playlist.id, None)
+
+
+def test_qobuz_pause_requests_boundary_and_resume_requeues(
+    api_client, auth_headers, db, monkeypatch
+):
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id="pause-resume",
+        name="Pause resume",
+    )
+    job = Job(
+        type="qobuz_download",
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.running,
+        lock_owner="worker-1",
+        payload=json.dumps(
+            {
+                "phase": "downloading",
+                "mode": "fetch_missing",
+                "playlist_id": None,
+            }
+        ),
+    )
+    db.add_all([source, playlist, job])
+    db.flush()
+    job.playlist_id = playlist.id
+    job.payload = json.dumps(
+        {
+            "phase": "downloading",
+            "mode": "fetch_missing",
+            "playlist_id": playlist.id,
+        }
+    )
+    db.commit()
+
+    requested = api_client.post(
+        f"/api/qobuz/downloads/{job.id}/pause",
+        headers=auth_headers,
+    )
+
+    assert requested.status_code == 200
+    assert requested.json()["pause_requested_at"] is not None
+    assert requested.json()["paused_at"] is None
+
+    job.status = JobStatus.pending
+    job.lock_owner = None
+    job.pause_requested_at = None
+    job.paused_at = utcnow()
+    db.commit()
+    queued: list[tuple] = []
+    monkeypatch.setattr(
+        "app.api.qobuz.qobuz_download_task.delay",
+        lambda *args: queued.append(args),
+    )
+
+    resumed = api_client.post(
+        f"/api/qobuz/downloads/{job.id}/resume",
+        headers=auth_headers,
+    )
+
+    assert resumed.status_code == 200
+    assert resumed.json()["paused_at"] is None
+    assert resumed.json()["pause_requested_at"] is None
+    assert queued == [(job.id, "fetch_missing", playlist.id, None)]
+
+
+def test_qobuz_pause_marks_unclaimed_pending_job_safe_immediately(
+    api_client, auth_headers, db
+):
+    user = ensure_user(db)
+    job = Job(
+        type="qobuz_download",
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.pending,
+        payload=json.dumps(
+            {"phase": "queued", "mode": "url", "url": "https://play.qobuz.com/track/1"}
+        ),
+    )
+    db.add(job)
+    db.commit()
+
+    response = api_client.post(
+        f"/api/qobuz/downloads/{job.id}/pause",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["paused_at"] is not None
+    assert response.json()["pause_requested_at"] is None
+
+
+
+def test_download_status_returns_latest_persisted_progress_for_playlist(
+    api_client, auth_headers, db
+):
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(source=source, user_id=user.id, external_id="p1", name="Playlist")
+    empty_playlist = Playlist(
+        source=source, user_id=user.id, external_id="p2", name="No runs"
+    )
+    db.add_all([source, playlist, empty_playlist])
+    db.flush()
+    older = Job(
+        type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.done,
+        payload=json.dumps(
+            {
+                "phase": "completed",
+                "downloads": {"playlist_id": playlist.id, "processed": 1},
+            }
+        ),
+    )
+    latest = Job(
+        type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.running,
+        payload=json.dumps(
+            {
+                "phase": "downloading",
+                "playlist_id": playlist.id,
+                "downloads": {
+                    "batch_total": 2,
+                    "processed": 1,
+                    "items": [
+                        {"item_id": 10, "status": "stored"},
+                        {"item_id": 11, "status": "downloading"},
+                    ],
+                },
+            }
+        ),
+    )
+    db.add_all([older, latest])
+    db.commit()
+
+    response = api_client.get(
+        f"/api/qobuz/download-status/{playlist.id}", headers=auth_headers
+    )
+    empty = api_client.get(
+        f"/api/qobuz/download-status/{empty_playlist.id}", headers=auth_headers
+    )
+    missing = api_client.get("/api/qobuz/download-status/9999", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == latest.id
+    assert response.json()["payload"]["downloads"]["items"][1]["status"] == "downloading"
+    assert empty.status_code == 200
+    assert empty.json() is None
+    assert missing.status_code == 404
+
+
+def test_download_eligibility_is_provider_specific(
+    api_client, auth_headers, db
+):
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source, user_id=user.id, external_id="eligible", name="Eligible"
+    )
+    first = PlaylistItem(
+        playlist=playlist,
+        position=0,
+        artist_raw="Artist",
+        title_raw="First",
+        artist_norm=normalize_artist("Artist"),
+        title_norm=normalize_title("First"),
+        album_norm="",
+    )
+    second = PlaylistItem(
+        playlist=playlist,
+        position=1,
+        artist_raw="Artist",
+        title_raw="Second",
+        artist_norm=normalize_artist("Artist"),
+        title_norm=normalize_title("Second"),
+        album_norm="",
+    )
+    third = PlaylistItem(
+        playlist=playlist,
+        position=2,
+        artist_raw="Artist",
+        title_raw="Already stored elsewhere",
+        artist_norm=normalize_artist("Artist"),
+        title_norm=normalize_title("Already stored elsewhere"),
+        album_norm="",
+    )
+    db.add_all([source, playlist, first, second, third])
+    db.flush()
+    db.add_all(
+        [
+            Match(playlist_item_id=first.id, status=MatchStatus.missing),
+            Match(playlist_item_id=second.id, status=MatchStatus.missing),
+            Match(playlist_item_id=third.id, status=MatchStatus.missing),
+            ProviderAttempt(
+                provider="qobuz",
+                lookup_key=provider_lookup_key(first),
+                playlist_item_id=first.id,
+                status="not_found",
+            ),
+            ProviderAttempt(
+                provider="future-source",
+                lookup_key=provider_lookup_key(second),
+                playlist_item_id=second.id,
+                status="not_found",
+            ),
+            ProviderAttempt(
+                provider="future-source",
+                lookup_key=provider_lookup_key(third),
+                playlist_item_id=third.id,
+                status="stored",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = api_client.get(
+        f"/api/qobuz/download-eligibility/{playlist.id}", headers=auth_headers
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_missing": 3,
+        "eligible": 1,
+        "already_checked": 2,
+    }
+
+
+def test_download_endpoints_require_configuration(
+    api_client, auth_headers, db, monkeypatch
+):
+    _configure_qobuz(monkeypatch, enabled=False)
+    user = ensure_user(db)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(source=source, user_id=user.id, external_id="p1", name="Playlist")
+    db.add_all([source, playlist])
+    db.commit()
+
+    download = api_client.post(
+        "/api/qobuz/download-url",
+        json={"url": "https://play.qobuz.com/track/1"},
+        headers=auth_headers,
+    )
+    fetch = api_client.post(
+        "/api/qobuz/fetch-missing",
+        json={"playlist_id": playlist.id},
+        headers=auth_headers,
+    )
+
+    assert download.status_code == 503
+    assert fetch.status_code == 503
+
+
+# --- staging verification and library import -------------------------------------
+
+
+def test_verify_staging_files_rejects_broken_and_non_audio(tmp_path, ffmpeg_binary):
+    valid = tmp_path / "valid.flac"
+    _write_flac(
+        ffmpeg_binary,
+        valid,
+        frequency=440,
+        metadata={"artist": "A", "title": "T"},
+    )
+    broken = tmp_path / "broken.flac"
+    broken.write_bytes(b"this is not flac content")
+    empty = tmp_path / "empty.mp3"
+    empty.touch()
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"jpeg-bytes")
+
+    verified, rejected = verify_staging_files([valid, broken, empty, cover])
+
+    assert verified == [valid]
+    reasons = {Path(entry["path"]).name: entry["reason"] for entry in rejected}
+    assert set(reasons) == {"broken.flac", "empty.mp3", "cover.jpg"}
+    assert reasons["cover.jpg"] == "unsupported extension"
+    assert reasons["empty.mp3"] == "unsupported extension"
+
+
+def test_sidecar_paths_remove_cover_art_but_preserve_unknown_rejections(
+    tmp_path, ffmpeg_binary
+):
+    staging = tmp_path / "staging"
+    album = staging / "Artist - Album"
+    album.mkdir(parents=True)
+    valid = album / "01. Song.flac"
+    _write_flac(
+        ffmpeg_binary,
+        valid,
+        frequency=440,
+        metadata={"artist": "A", "title": "T"},
+    )
+    cover = album / "cover.jpg"
+    cover.write_bytes(b"jpeg-bytes")
+    unknown = album / "notes.txt"
+    unknown.write_text("keep for inspection", encoding="utf-8")
+
+    verified = qobuz_service._sidecar_paths(
+        [
+            "Artist - Album/01. Song.flac",
+            "Artist - Album/cover.jpg",
+            "Artist - Album/notes.txt",
+        ],
+        staging,
+    )
+
+    assert verified == [valid.resolve()]
+    assert valid.exists()
+    assert not cover.exists()
+    assert unknown.exists()
+
+
+def test_import_moves_audio_and_preserves_structure(tmp_path):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    source_file = staging / "Artist - Album (2024)" / "01. Song.flac"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_bytes(b"audio")
+
+    report = import_files_to_library([source_file], staging, library)
+
+    target = library / "Artist - Album (2024)" / "01. Song.flac"
+    assert report["imported"] == [str(target.resolve())]
+    assert target.read_bytes() == b"audio"
+    assert not source_file.exists()
+    # Empty staging album folders are cleaned up after the move.
+    assert not (staging / "Artist - Album (2024)").exists()
+
+
+def test_import_never_overwrites_and_rejects_traversal(tmp_path):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    conflict_source = staging / "Album" / "01. Song.flac"
+    conflict_source.parent.mkdir(parents=True)
+    conflict_source.write_bytes(b"new audio")
+    existing = library / "Album" / "01. Song.flac"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"original audio")
+    outside = tmp_path / "outside.flac"
+    outside.write_bytes(b"evil")
+
+    report = import_files_to_library([conflict_source, outside], staging, library)
+
+    assert report["imported"] == []
+    assert len(report["conflicts"]) == 1
+    assert existing.read_bytes() == b"original audio"
+    assert conflict_source.exists()  # conflict stays in staging for review
+    assert len(report["rejected"]) == 1
+    assert report["rejected"][0]["path"] == str(outside)
+
+
+def test_mark_downloads_stored_preserves_per_track_outcomes(tmp_path):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    first = staging / "Album" / "01.flac"
+    second = staging / "Album" / "02.flac"
+    first.parent.mkdir(parents=True)
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    conflict = library / "Album" / "02.flac"
+    conflict.parent.mkdir(parents=True)
+    conflict.write_bytes(b"existing")
+    downloads = {
+        "downloaded": 2,
+        "items": [
+            {"item_id": 1, "status": "downloaded", "files": [str(first)]},
+            {"item_id": 2, "status": "downloaded", "files": [str(second)]},
+            {"item_id": 3, "status": "not_found"},
+        ],
+    }
+
+    report = import_files_to_library([first, second], staging, library)
+    mark_downloads_stored(downloads, report, staging, library)
+
+    assert [item["status"] for item in downloads["items"]] == [
+        "stored",
+        "conflict",
+        "not_found",
+    ]
+    assert downloads["stored"] == 1
+    assert downloads["conflicts"] == 1
+    assert downloads["import_failed"] == 0
+    assert downloads["items"][0]["file_count"] == 1
+    assert "files" not in downloads["items"][0]
+
+
+# --- isolated sidecar boundary -------------------------------------------------
+
+
+def test_create_client_requires_configuration(db, monkeypatch):
+    _configure_qobuz(monkeypatch, enabled=False)
+    with pytest.raises(QobuzConfigurationError):
+        qobuz_service.create_qobuz_client(db)
+
+
+def test_is_qobuz_configured_requires_only_internal_control_settings(monkeypatch):
+    _configure_qobuz(monkeypatch)
+    assert qobuz_service.is_qobuz_configured() is True
+
+    monkeypatch.setattr("app.config.settings.qobuz_internal_token", "")
+    assert qobuz_service.is_qobuz_configured() is False
+    monkeypatch.setattr("app.config.settings.qobuz_internal_token", "too-short")
+    assert qobuz_service.is_qobuz_configured() is False
+
+
+def test_create_client_connects_to_sidecar_without_provider_secrets(db, monkeypatch):
+    _configure_qobuz(monkeypatch)
+    save_credential(db, "qobuz", {"token": "q" * 32, "user_id": "42"})
+    db.commit()
+    calls: list[str] = []
+
+    def connect(self):
+        calls.append(self.internal_token)
+        self.label = "Studio"
+        return {"connected": True, "label": "Studio"}
+
+    monkeypatch.setattr(qobuz_service.QobuzSidecarClient, "connect", connect)
+    client = qobuz_service.create_qobuz_client(db)
+
+    assert client.label == "Studio"
+    assert calls == ["test-sidecar-token" * 2]
+    assert not hasattr(qobuz_service.settings, "qobuz_auth_token")
+
+
+def test_sidecar_http_error_does_not_include_response_body(monkeypatch):
+    _configure_qobuz(monkeypatch)
+
+    class Response:
+        status_code = 502
+        text = "provider-token-should-never-escape"
+
+        def json(self):
+            return {"error": self.text}
+
+    monkeypatch.setattr(qobuz_service.httpx, "request", lambda *args, **kwargs: Response())
+    client = qobuz_service.QobuzSidecarClient(
+        "http://qobuz-sidecar.invalid",
+        "test-sidecar-token",
+        credential={"provider": "qobuz"},
+    )
+
+    with pytest.raises(QobuzProviderError) as captured:
+        client.connect()
+    assert "provider-token" not in str(captured.value)
+
+
+# --- worker task --------------------------------------------------------------------
+
+
+def test_qobuz_task_pauses_before_first_batch_when_disk_guard_is_low(
+    session_factory, monkeypatch, tmp_path
+):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    monkeypatch.setattr("app.config.settings.qobuz_staging_path", str(staging))
+    monkeypatch.setattr(
+        "app.config.settings.qobuz_min_free_bytes",
+        1024 * 1024 * 1024 * 1024,
+    )
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+
+    session = session_factory()
+    user = ensure_user(session)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id="disk-guard",
+        name="Disk guard",
+    )
+    session.add_all([source, playlist])
+    session.flush()
+    job = Job(
+        type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.pending,
+        payload=json.dumps(
+            {"mode": "fetch_missing", "playlist_id": playlist.id}
+        ),
+    )
+    session.add(job)
+    session.commit()
+    job_id, playlist_id = job.id, playlist.id
+    session.close()
+
+    def unexpected_client(_db):
+        raise AssertionError("provider must not start while disk guard is active")
+
+    monkeypatch.setattr(
+        "app.workers.tasks.create_qobuz_client",
+        unexpected_client,
+    )
+
+    result = qobuz_download_task.run(
+        job_id, "fetch_missing", playlist_id=playlist_id
+    )
+
+    check = session_factory()
+    paused_job = check.get(Job, job_id)
+    assert result == {
+        "status": "paused",
+        "job_id": job_id,
+        "reason": "disk_guard",
+    }
+    assert paused_job.status == JobStatus.pending
+    assert paused_job.paused_at is not None
+    assert paused_job.lock_owner is None
+    check.close()
+
+
+def test_qobuz_resume_drains_interrupted_batch_before_provider(
+    session_factory, monkeypatch, tmp_path
+):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    staging.mkdir()
+    library.mkdir()
+    monkeypatch.setattr("app.config.settings.qobuz_staging_path", str(staging))
+    monkeypatch.setattr("app.config.settings.music_library_path", str(library))
+    monkeypatch.setattr("app.config.settings.qobuz_min_free_bytes", 0)
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+
+    session = session_factory()
+    user = ensure_user(session)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id="recover-drain",
+        name="Recover drain",
+    )
+    session.add_all([source, playlist])
+    session.flush()
+    job = Job(
+        type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.pending,
+        payload=json.dumps(
+            {
+                "phase": "paused",
+                "pause_reason": "storage_degraded",
+                "mode": "fetch_missing",
+                "playlist_id": playlist.id,
+                "downloads": {"items": []},
+                "import": {
+                    "imported": [str(library / "pending.flac")],
+                    "conflicts": [],
+                    "rejected": [],
+                },
+            }
+        ),
+    )
+    session.add(job)
+    session.commit()
+    job_id, playlist_id = job.id, playlist.id
+    session.close()
+
+    order: list[str] = []
+    monkeypatch.setattr(
+        "app.workers.tasks.scan_library",
+        lambda *_args, **_kwargs: (
+            order.append("scan")
+            or SimpleNamespace(to_dict=lambda: {"discovered": 1})
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks.replicate_imported_files",
+        lambda *_args: (
+            order.append("replicate")
+            or {"status": "completed", "uploaded": 1, "evicted": 1}
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks.run_matching",
+        lambda *_args, **_kwargs: (
+            order.append("matching")
+            or SimpleNamespace(to_dict=lambda: {"ready": 1, "missing": 0})
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks.create_qobuz_client",
+        lambda _db: order.append("provider") or FakeQobuzClient(),
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks.fetch_missing_tracks",
+        lambda *_args, **_kwargs: ({"items": [], "processed": 0}, []),
+    )
+
+    result = qobuz_download_task.run(
+        job_id, "fetch_missing", playlist_id=playlist_id
+    )
+
+    assert order == ["scan", "replicate", "matching", "provider"]
+    assert result["phase"] == "completed"
+    assert result["scan"]["status"] == "completed"
+    assert result["matching"]["ready"] == 1
+
+
+def _create_qobuz_job(session_factory, playlist=None, mode="fetch_missing"):
+    session = session_factory()
+    user = ensure_user(session)
+    playlist_id = None
+    if playlist is not None:
+        session.add(playlist.source)
+        session.add(playlist)
+        session.flush()
+        playlist_id = playlist.id
+    job = Job(
+        type="qobuz_download",
+        playlist_id=playlist_id,
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.pending,
+        payload=json.dumps({"mode": mode, "playlist_id": playlist_id}),
+    )
+    session.add(job)
+    session.commit()
+    result = job.id, playlist_id
+    session.close()
+    return result
+
+
+def test_qobuz_task_fails_without_retry_on_configuration_error(
+    session_factory, monkeypatch
+):
+    job_id, _ = _create_qobuz_job(session_factory, mode="url")
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+
+    def raise_config(_db):
+        raise QobuzConfigurationError("not configured")
+
+    monkeypatch.setattr("app.workers.tasks.create_qobuz_client", raise_config)
+
+    result = qobuz_download_task.run(
+        job_id, "url", url="https://play.qobuz.com/track/1"
+    )
+
+    check = session_factory()
+    job = check.get(Job, job_id)
+    assert result["status"] == "failed"
+    assert job.status == JobStatus.failed
+    assert job.error == "Qobuz download failed (QobuzConfigurationError)"
+    assert job.finished_at is not None
+    check.close()
+
+
+def test_qobuz_fetch_missing_end_to_end(
+    session_factory, monkeypatch, tmp_path, ffmpeg_binary
+):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr("app.config.settings.qobuz_staging_path", str(staging))
+    monkeypatch.setattr("app.config.settings.music_library_path", str(library))
+    monkeypatch.setattr("app.config.settings.qobuz_request_delay_seconds", 0)
+    monkeypatch.setattr("app.config.settings.musicbrainz_enabled", False)
+    monkeypatch.setattr("app.config.settings.storage_primary_backend", "local")
+
+    session = session_factory()
+    user = ensure_user(session)
+    source = PlaylistSource(user_id=user.id, service=ServiceEnum.spotify)
+    playlist = Playlist(
+        source=source,
+        user_id=user.id,
+        external_id="qobuz-pl",
+        name="Qobuz Playlist",
+    )
+    tracks = [
+        ("Tagged Artist", "First Track", "Tagged Album"),
+        ("Tagged Artist", "Second Track", "Tagged Album"),
+    ]
+    items = []
+    for position, (artist, title, album) in enumerate(tracks):
+        item = PlaylistItem(
+            playlist=playlist,
+            position=position,
+            artist_raw=artist,
+            title_raw=title,
+            album_raw=album,
+            artist_norm=normalize_artist(artist),
+            title_norm=normalize_title(title),
+            album_norm=normalize_album(album),
+        )
+        items.append(item)
+    # UNMATCHED item without a Match row must be ignored by fetch-missing.
+    unmatched = PlaylistItem(
+        playlist=playlist,
+        position=2,
+        artist_raw="Tagged Artist",
+        title_raw="Third Track",
+        album_raw="Tagged Album",
+        artist_norm=normalize_artist("Tagged Artist"),
+        title_norm=normalize_title("Third Track"),
+        album_norm=normalize_album("Tagged Album"),
+    )
+    session.add_all([source, playlist, *items, unmatched])
+    session.flush()
+    for item in items:
+        session.add(
+            Match(
+                playlist_item_id=item.id,
+                status=MatchStatus.missing,
+                confidence=0.0,
+                method="none",
+            )
+        )
+    job = Job(
+        type="qobuz_download",
+        playlist_id=playlist.id,
+        user_id=user.id,
+        scope=JobScope.user,
+        status=JobStatus.pending,
+        payload=json.dumps({"mode": "fetch_missing", "playlist_id": playlist.id}),
+    )
+    session.add(job)
+    session.commit()
+    job_id, playlist_id = job.id, playlist.id
+    session.close()
+
+    fake_client = FakeQobuzClient(
+        tracks=[
+            _track_payload(101, "First Track"),
+            _track_payload(102, "Second Track"),
+            _track_payload(103, "Third Track"),
+        ]
+    )
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+    monkeypatch.setattr("app.workers.tasks.create_qobuz_client", lambda _db: fake_client)
+
+    def fake_download(client, track_id, staging_dir, quality, embed_art):
+        titles = {"101": "First Track", "102": "Second Track", "103": "Third Track"}
+        title = titles[str(track_id)]
+        target = (
+            Path(staging_dir)
+            / "Tagged Artist - Tagged Album (2024) [24B-96kHz]"
+            / f"{title}.flac"
+        )
+        _write_flac(
+            ffmpeg_binary,
+            target,
+            frequency=440 if title == "First Track" else 550,
+            metadata={
+                "artist": "Tagged Artist",
+                "album": "Tagged Album",
+                "title": title,
+                "date": "2024",
+            },
+        )
+        return [target]
+
+    monkeypatch.setattr(
+        "app.services.qobuz.download_track_to_staging", fake_download
+    )
+
+    result = qobuz_download_task.run(
+        job_id, "fetch_missing", playlist_id=playlist_id
+    )
+
+    assert result["phase"] == "completed"
+    assert result["downloads"]["total_missing"] == 2
+    assert result["downloads"]["downloaded"] == 2
+    assert result["downloads"]["processed"] == 2
+    assert result["downloads"]["stored"] == 2
+    assert {item["status"] for item in result["downloads"]["items"]} == {"stored"}
+    assert result["downloads"]["failed"] == 0
+    assert len(result["import"]["imported"]) == 2
+    assert result["scan"]["status"] == "completed"
+    assert result["scan"]["added"] == 2
+    assert result["matching"]["ready"] == 2
+    assert result["matching"]["missing"] == 1  # the untouched UNMATCHED item
+
+    imported = [Path(path) for path in result["import"]["imported"]]
+    assert all(path.is_file() for path in imported)
+    assert all(library.resolve() in path.resolve().parents for path in imported)
+    assert not list(staging.rglob("*.flac"))
+
+    check = session_factory()
+    job = check.get(Job, job_id)
+    assert job.status == JobStatus.done
+    assert job.lock_owner is None
+    matches = check.scalars(
+        select(Match)
+        .join(PlaylistItem, PlaylistItem.id == Match.playlist_item_id)
+        .where(PlaylistItem.playlist_id == playlist_id)
+    ).all()
+    statuses = [match.status for match in matches]
+    assert statuses.count(MatchStatus.ready) == 2
+    assert statuses.count(MatchStatus.missing) == 1
+    ready_matches = [m for m in matches if m.status == MatchStatus.ready]
+    assert all(match.track_id is not None for match in ready_matches)
+    attempts = check.scalars(
+        select(ProviderAttempt).where(ProviderAttempt.provider == "qobuz")
+    ).all()
+    assert len(attempts) == 2
+    assert {attempt.status for attempt in attempts} == {"stored"}
+    check.close()
+
+
+def test_qobuz_url_task_downloads_imports_and_scans(
+    session_factory, monkeypatch, tmp_path, ffmpeg_binary
+):
+    staging = tmp_path / "staging"
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr("app.config.settings.qobuz_staging_path", str(staging))
+    monkeypatch.setattr("app.config.settings.music_library_path", str(library))
+
+    job_id, _ = _create_qobuz_job(session_factory, mode="url")
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "app.workers.tasks.create_qobuz_client", lambda _db: FakeQobuzClient()
+    )
+
+    def fake_url_download(client, url, staging_dir, quality, embed_art):
+        target = Path(staging_dir) / "Artist - Album (2024) [24B-96kHz]" / "Song.flac"
+        _write_flac(
+            ffmpeg_binary,
+            target,
+            frequency=440,
+            metadata={"artist": "Artist", "album": "Album", "title": "Song"},
+        )
+        return [target]
+
+    monkeypatch.setattr(
+        "app.workers.tasks.download_url_to_staging", fake_url_download
+    )
+
+    result = qobuz_download_task.run(
+        job_id, "url", url="https://play.qobuz.com/album/abc123"
+    )
+
+    assert result["phase"] == "completed"
+    assert result["mode"] == "url"
+    assert result["downloads"]["downloaded"] == 1
+    assert len(result["import"]["imported"]) == 1
+    assert result["scan"]["added"] == 1
+    assert result["matching"] is None
+
+    check = session_factory()
+    job = check.get(Job, job_id)
+    assert job.status == JobStatus.done
+    check.close()

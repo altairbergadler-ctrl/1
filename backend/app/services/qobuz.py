@@ -411,4 +411,470 @@ def choose_track_candidate(
         combined = float(
             token_set_ratio(
                 f"{item_artist} {item_title}",
-                f"{noïmm¢G§²ÚîÆ­yÒ&V6öâÒ&×WFvVâ6÷VÆBæ÷B'6RF†Rf–ÆR ¢VÆ–bæ÷B—6–ç7Fæ6R†ÆVæwF‚Â†–çBÂfÆöB’’÷"ÆVæwF‚ÃÒ ¢&V6öâÒ&VF–ò†2æòGW&F–öâ ¢–b&V6öâ—2æöæS ¢fW&–f–VBæVæB‡F‚¢VÇ6S ¢&V¦V7FVBæVæB‡²'F‚#¢7G"‡F‚’Â'&V6öâ#¢&V6öçÒ¢&WGW&âfW&–f–VBÂ&V¦V7FV@  ¦FVb÷6–FV6%÷F‡2‡&VÆF—fU÷F‡3¢—FW&&ÆU·7G%ÒÂ7Fv–æuöF—#¢7G"ÂF‚’ÓâÆ—7EµF…Ó ¢7Fv–ærÒF‚‡7Fv–æuöF—"’æW‡æGW6W"‚’ç&W6öÇfR‚¢F‡3¢Æ—7EµF…ÒÒµÐ¢f÷"&VÆF—fU÷F‚–â&VÆF—fU÷F‡3 ¢6æF–FFRÒ‡7Fv–ærò&VÆF—fU÷F‚’ç&W6öÇfR‚¢–bæ÷B6æF–FFRæ—5÷&VÆF—fU÷Fò‡7Fv–ær“ ¢&—6Rö'W¥&÷f–FW$W'&÷"‚%F†Rö'W¢6–FV6"&WGW&æVBâVç6fR7Fv–ærF‚"¢F‡2æVæB†6æF–FFR¢fW&–f–VBÂ&V¦V7FVBÒfW&–g•÷7Fv–æuöf–ÆW2‡F‡2¢2F†R6–FV6"Ö’&WGW&âF÷væÆöFVB6÷fW"'BÆöæw6–FRF†R&WVW7FV@¢2VF–òâ6÷fW'2&RFV×÷&'’7V—6—F–öâ'F–f7G3¢¶VWVæ¶æ÷vâ&V¦V7FV@¢2f–ÆW2f÷"–ç7V7F–öâÂ'WB&VÖ÷fR¶æ÷vâ–ÖvRf÷&ÖG2–ç6–FR7Fv–ærà¢f÷"VçG'’–â&V¦V7FVC ¢'F–f7BÒF‚‡7G"†VçG'’ævWB‚'F‚"’÷"""’’æW‡æGW6W"‚’ç&W6öÇfR‚¢–b€¢'F–f7Bæ—5÷&VÆF—fU÷Fò‡7Fv–ær¢æB'F–f7Bç7Vff—‚æ66VföÆB‚’–âô4õdU%ô%EôU…DTå4”ôå0¢“ ¢G'“ ¢'F–f7BçVæÆ–æ²†Ö—76–æuöö³ÕG'VR¢W†6WBõ4W'&÷# ¢70¢ö6ÆVçWöV×G•÷7Fv–æuöF—'2‡7Fv–ær¢&WGW&âfW&–f–V@  ¦FVbF÷væÆöE÷G&6µ÷Fõ÷7Fv–ær€¢6Æ–VçC¢ç’À¢G&6µö–C¢7G"À¢7Fv–æuöF—#¢7G"ÂF‚À¢VÆ—G“¢–çBÀ¢VÖ&VEö'C¢&ööÂÀ¢’ÓâÆ—7EµF…Ó ¢G'“ ¢&VÆF—fU÷F‡2Ò6Æ–VçBæF÷væÆöE÷G&6²‡7G"‡G&6µö–B’Â–çB‡VÆ—G’’ÂVÖ&VEö'B¢W†6WBö'W¥6W'f–6TW'&÷# ¢&—6P¢W†6WBW†6WF–öâ2W†3 ¢&—6Rö'W¥&÷f–FW$W'&÷"‚%ö'W¢G&6²F÷væÆöBf–ÆVB"’g&öÒW†0¢&WGW&â÷6–FV6%÷F‡2‡&VÆF—fU÷F‡2Â7Fv–æuöF—"  ¦FVbF÷væÆöE÷W&Å÷Fõ÷7Fv–ær€¢6Æ–VçC¢ç’À¢W&Ã¢7G"À¢7Fv–æuöF—#¢7G"ÂF‚À¢VÆ—G“¢–çBÀ¢VÖ&VEö'C¢&ööÂÀ¢’ÓâÆ—7EµF…Ó ¢G'“ ¢&VÆF—fU÷F‡2Ò6Æ–VçBæF÷væÆöE÷W&Â‡7G"‡W&Â’Â–çB‡VÆ—G’’ÂVÖ&VEö'B¢W†6WBö'W¥6W'f–6TW'&÷# ¢&—6P¢W†6WBW†6WF–öâ2W†3 ¢&—6Rö'W¥&÷f–FW$W'&÷"‚%ö'W¢U$ÂF÷væÆöBf–ÆVB"’g&öÒW†0¢&WGW&â÷6–FV6%÷F‡2‡&VÆF—fU÷F‡2Â7Fv–æuöF—"  ¦FVbö6ÆVçWöV×G•÷7Fv–æuöF—'2‡7Fv–æs¢F‚’ÓâæöæS ¢–bæ÷B7Fv–æræW†—7G2‚“ ¢&WGW&à¢F—&V7F÷&–W2Ò6÷'FVB€¢‡F‚f÷"F‚–â7Fv–ærç&vÆö"‚"¢"’–bF‚æ—5öF—"‚’’À¢¶W“ÖÆÖ&FFƒ¢ÆVâ‡F‚ç'G2’À¢&WfW'6SÕG'VRÀ¢¢f÷"F—&V7F÷'’–âF—&V7F÷&–W3 ¢G'“ ¢F—&V7F÷'’ç&ÖF—"‚¢W†6WBõ4W'&÷# ¢70  ¦FVb–×÷'Eöf–ÆW5÷FõöÆ–'&'’€¢f–ÆW3¢—FW&&ÆUµF…ÒÀ¢7Fv–æuöF—#¢7G"ÂF‚À¢Æ–'&'•÷Fƒ¢7G"ÂF‚À¢’ÓâF–7C ¢7Fv–æu÷&ö÷BÒF‚‡7Fv–æuöF—"’æW‡æGW6W"‚’ç&W6öÇfR‚¢Æ–'&'•÷&ö÷BÒF‚†Æ–'&'•÷F‚’æW‡æGW6W"‚’ç&W6öÇfR‚¢Æ–'&'•÷&ö÷BæÖ¶F—"‡&VçG3ÕG'VRÂW†—7Eöö³ÕG'VR¢&W÷'C¢F–7E·7G"ÂÆ—7EÒÒ²&–×÷'FVB#¢µÒÂ&6öæfÆ–7G2#¢µÒÂ'&V¦V7FVB#¢µ×Ð¢f÷"f–ÆR–âf–ÆW3 ¢6÷W&6RÒF‚†f–ÆR’æW‡æGW6W"‚’ç&W6öÇfR‚¢G'“ ¢&VÆF—fRÒ6÷W&6Rç&VÆF—fU÷Fò‡7Fv–æu÷&ö÷B¢W†6WBfÇVTW'&÷# ¢&W÷'E²'&V¦V7FVB%ÒæVæB€¢²'F‚#¢7G"†f–ÆR’Â'&V6öâ#¢&f–ÆR—2÷WG6–FRF†R7Fv–ær&V'Ð¢¢6öçF–çVP¢F&vWBÒ†Æ–'&'•÷&ö÷Bò&VÆF—fR’ç&W6öÇfR‚¢–bæ÷BF&vWBæ—5÷&VÆF—fU÷Fò†Æ–'&'•÷&ö÷B“ ¢&W÷'E²'&V¦V7FVB%ÒæVæB€¢²'F‚#¢7G"†f–ÆR’Â'&V6öâ#¢'F&vWBW66W2F†RÆ–'&'’&ö÷B'Ð¢¢6öçF–çVP¢–bF&vWBæW†—7G2‚“ ¢&W÷'E²&6öæfÆ–7G2%ÒæVæB€¢²'F‚#¢7G"†f–ÆR’Â'F&vWB#¢7G"‡F&vWB’Â'&V6öâ#¢&Ç&VG’W†—7G2'Ð¢¢6öçF–çVP¢F&vWBç&VçBæÖ¶F—"‡&VçG3ÕG'VRÂW†—7Eöö³ÕG'VR¢6‡WF–ÂæÖ÷fR‡7G"‡6÷W&6R’Â7G"‡F&vWB’¢&W÷'E²&–×÷'FVB%ÒæVæB‡7G"‡F&vWB’¢ö6ÆVçWöV×G•÷7Fv–æuöF—'2‡7Fv–æu÷&ö÷B¢&WGW&â&W÷'@  ¦FVb&÷f–FW%öÆöö·Wö¶W’†—FVÓ¢Æ–Æ—7D—FVÒ’Óâ7G# ¢""%7F&ÆR–FVçF—G’6†&VB'’WVÂÆ–Æ—7B&÷w2æBgWGW&R&÷f–FW'2â""  ¢—7&2Òæ÷&ÖÆ—¦Uö—7&2†—FVÒæ—7&2¢–b—7&3 ¢–FVçF—G’Ò‚&—7&2"Â—7&2¢VÇ6S ¢–FVçF—G’Ò€¢&ÖWFFF"À¢—FVÒæ'F—7Eöæ÷&Ò÷"æ÷&ÖÆ—¦Uö'F—7B†—FVÒæ'F—7E÷&r’À¢—FVÒçF—FÆUöæ÷&Ò÷"æ÷&ÖÆ—¦U÷F—FÆR†—FVÒçF—FÆU÷&r’À¢—FVÒæÆ'VÕöæ÷&Ò÷"æ÷&ÖÆ—¦UöÆ'VÒ†—FVÒæÆ'VÕ÷&r’À¢7G"†—FVÒæGW&F–öåö×2÷"""’À¢¢&WGW&â†6†Æ–"ç6†#Sb‚%Çƒb"æ¦ö–â†–FVçF—G’’æVæ6öFR‚'WFbÓ‚"’’æ†W†F–vW7B‚  ¦FVbÖ—76–æu÷&÷f–FW%ö—FV×2€¢F#¢6W76–öâÂÆ–Æ—7C¢Æ–Æ—7BÂ&÷f–FW#¢7G ¢’ÓâGWÆU¶Æ—7EµÆ–Æ—7D—FVÕÒÂÆ—7EµÆ–Æ—7D—FVÕÕÓ ¢7FFVÖVçBÒ€¢6VÆV7B…Æ–Æ—7D—FVÒ¢æ¦ö–â„ÖF6‚ÂÖF6‚çÆ–Æ—7Eö—FVÕö–BÓÒÆ–Æ—7D—FVÒæ–B¢çv†W&R€¢Æ–Æ—7D—FVÒçÆ–Æ—7Eö–BÓÒÆ–Æ—7Bæ–BÀ¢ÖF6‚ç7FGW2ÓÒÖF6…7FGW2æÖ—76–ærÀ¢¢æ÷&FW%ö'’…Æ–Æ—7D—FVÒç÷6—F–öâÂÆ–Æ—7D—FVÒæ–B¢¢ÆÅö—FV×2ÒÆ—7B†F"ç66Æ'2‡7FFVÖVçB’¢Æöö·Wö¶W—2Ò·&÷f–FW%öÆöö·Wö¶W’†—FVÒ’f÷"—FVÒ–âÆÅö—FV×7Ð¢GFV×FVEö¶W—2Ò6WB‚¢–bÆöö·Wö¶W—3 ¢GFV×G2ÒF"æW†V7WFR€¢6VÆV7B€¢&÷f–FW$GFV×Bç&÷f–FW"À¢&÷f–FW$GFV×BæÆöö·Wö¶W’À¢&÷f–FW$GFV×Bç7FGW2À¢’çv†W&R…&÷f–FW$GFV×BæÆöö·Wö¶W’æ–åò†Æöö·Wö¶W—2’¢¢GFV×FVEö¶W—2Ò°¢Æöö·Wö¶W¢f÷"&÷f–FW%öæÖRÂÆöö·Wö¶W’Â7FGW2–âGFV×G0¢–b&÷f–FW%öæÖRÓÒ&÷f–FW"÷"7FGW2–â²'7F÷&VB"Â&6öæfÆ–7B'Ð¢Ð¢6VVåö¶W—2Ò6WB†GFV×FVEö¶W—2¢VÆ–v–&ÆS¢Æ—7EµÆ–Æ—7D—FVÕÒÒµÐ¢f÷"—FVÒ–âÆÅö—FV×3 ¢Æöö·Wö¶W’Ò&÷f–FW%öÆöö·Wö¶W’†—FVÒ¢–bÆöö·Wö¶W’–â6VVåö¶W—3 ¢6öçF–çVP¢6VVåö¶W—2æFB†Æöö·Wö¶W’¢VÆ–v–&ÆRæVæB†—FVÒ¢&WGW&âÆÅö—FV×2ÂVÆ–v–&ÆP  ¦FVbö'W¥öF÷væÆöEöVÆ–v–&–Æ—G’†F#¢6W76–öâÂÆ–Æ—7C¢Æ–Æ—7B’ÓâF–7E·7G"Â–çEÓ ¢ÆÅöÖ—76–ærÂVÆ–v–&ÆRÒÖ—76–æu÷&÷f–FW%ö—FV×2†F"ÂÆ–Æ—7BÂ'ö'W¢"¢&WGW&â°¢'F÷FÅöÖ—76–ær#¢ÆVâ†ÆÅöÖ—76–ær’À¢&VÆ–v–&ÆR#¢ÆVâ†VÆ–v–&ÆR’À¢&Ç&VG•ö6†V6¶VB#¢ÆVâ†ÆÅöÖ—76–ær’ÒÆVâ†VÆ–v–&ÆR’À¢Ð  ¦FVbÖ&µöF÷væÆöG5÷7F÷&VB€¢F÷væÆöG3¢F–7BÀ¢–×÷'E÷&W÷'C¢F–7BÀ¢7Fv–æuöF—#¢7G"ÂF‚À¢Æ–'&'•÷Fƒ¢7G"ÂF‚À¢’ÓâæöæS ¢""%&öÖ÷FRW"×G&6²F÷væÆöB7FFW2gFW"f–ÆW2Ö÷fR–çFòF†RÆ–'&'’â""  ¢7Fv–æu÷&ö÷BÒF‚‡7Fv–æuöF—"’æW‡æGW6W"‚’ç&W6öÇfR‚¢Æ–'&'•÷&ö÷BÒF‚†Æ–'&'•÷F‚’æW‡æGW6W"‚’ç&W6öÇfR‚¢–×÷'FVBÒ°¢7G"…F‚‡F‚’æW‡æGW6W"‚’ç&W6öÇfR‚’’f÷"F‚–â–×÷'E÷&W÷'E²&–×÷'FVB%Ð¢Ð¢6öæfÆ–7G2Ò°¢7G"…F‚†VçG'•²'F&vWB%Ò’æW‡æGW6W"‚’ç&W6öÇfR‚’¢f÷"VçG'’–â–×÷'E÷&W÷'E²&6öæfÆ–7G2%Ð¢Ð¢7F÷&VBÒ ¢6öæfÆ–7FVBÒ ¢–×÷'Eöf–ÆVBÒ ¢f÷"VçG'’–âF÷væÆöG2ævWB‚&—FV×2"ÂµÒ“ ¢f–ÆW2ÒµF‚‡F‚’æW‡æGW6W"‚’ç&W6öÇfR‚’f÷"F‚–âVçG'’ç÷‚&f–ÆW2"ÂµÒ•Ð¢–bf–ÆW3 ¢VçG'•²&f–ÆUö6÷VçB%ÒÒÆVâ†f–ÆW2¢–bVçG'’ævWB‚'7FGW2"’Ò&F÷væÆöFVB# ¢6öçF–çVP¢F&vWG3¢Æ—7E·7G%ÒÒµÐ¢G'“ ¢F&vWG2Ò°¢7G"‚†Æ–'&'•÷&ö÷Bò6÷W&6Rç&VÆF—fU÷Fò‡7Fv–æu÷&ö÷B’’ç&W6öÇfR‚’¢f÷"6÷W&6R–âf–ÆW0¢Ð¢W†6WBfÇVTW'&÷# ¢F&vWG2ÒµÐ¢–bF&vWG2æBÆÂ‡F&vWB–â–×÷'FVBf÷"F&vWB–âF&vWG2“ ¢VçG'•²'7FGW2%ÒÒ'7F÷&VB ¢7F÷&VB³Ò¢VÆ–bF&vWG2æBç’‡F&vWB–â6öæfÆ–7G2f÷"F&vWB–âF&vWG2“ ¢VçG'•²'7FGW2%ÒÒ&6öæfÆ–7B ¢6öæfÆ–7FVB³Ò¢VÇ6S ¢VçG'•²'7FGW2%ÒÒ&f–ÆVB ¢VçG'•²&W'&÷"%ÒÒ&Æ–'&'’–×÷'Bf–ÆVB ¢–×÷'Eöf–ÆVB³Ò¢VçG&–W2ÒF÷væÆöG2ævWB‚&—FV×2"ÂµÒ¢F÷væÆöG5²'7F÷&VB%ÒÒ7VÒ†VçG'’ævWB‚'7FGW2"’ÓÒ'7F÷&VB"f÷"VçG'’–âVçG&–W2¢F÷væÆöG5²&6öæfÆ–7G2%ÒÒ7VÒ€¢VçG'’ævWB‚'7FGW2"’ÓÒ&6öæfÆ–7B"f÷"VçG'’–âVçG&–W0¢¢F÷væÆöG5²&–×÷'Eöf–ÆVB%ÒÒ7VÒ€¢VçG'’ævWB‚&W'&÷""’ÓÒ&Æ–'&'’–×÷'Bf–ÆVB"f÷"VçG'’–âVçG&–W0¢  ¦FVb÷&V6÷&E÷ö'W¥öGFV×B€¢F#¢6W76–öâÀ¢—FVÓ¢Æ–Æ—7D—FVÒÀ¢VçG'“¢F–7BÀ¢¦ö%ö–C¢–çBÂæöæRÀ¢’ÓâæöæS ¢Æöö·Wö¶W’Ò&÷f–FW%öÆöö·Wö¶W’†—FVÒ¢GFV×BÒF"ç66Æ"€¢6VÆV7B…&÷f–FW$GFV×B’çv†W&R€¢&÷f–FW$GFV×Bç&÷f–FW"ÓÒ'ö'W¢"À¢&÷f–FW$GFV×BæÆöö·Wö¶W’ÓÒÆöö·Wö¶W’À¢¢¢–bGFV×B—2æöæS ¢GFV×BÒ&÷f–FW$GFV×B‡&÷f–FW#Ò'ö'W¢"ÂÆöö·Wö¶W“ÖÆöö·Wö¶W’¢F"æFB†GFV×B¢GFV×BçÆ–Æ—7Eö—FVÕö–BÒ—FVÒæ–@¢GFV×Bæ¦ö%ö–BÒ¦ö%ö–@¢GFV×Bç7FGW2Ò7G"†VçG'’ævWB‚'7FGW2"’÷"&f–ÆVB"¢GFV×Bç&÷f–FW%ö—FVÕö–BÒVçG'’ævWB‚'ö'W¥÷G&6µö–B"¢GFV×Bç6VÆV7F–öåöÖWF†öBÒVçG'’ævWB‚'6VÆV7F–öâ"¢GFV×BæW'&÷%ö6öFRÒVçG'’ævWB‚&W'&÷""¢F"æfÇW6‚‚  ¦FVb&V6÷&E÷ö'W¥öF÷væÆöEöGFV×G2€¢F#¢6W76–öâÀ¢F÷væÆöG3¢F–7BÀ¢Æ–Æ—7Eö—FV×3¢F–7E¶–çBÂÆ–Æ—7D—FVÕÒÀ¢¦ö%ö–C¢–çBÂæöæRÀ¢’ÓâæöæS ¢""%W'6—7Bf–æÂ7F÷&VBö6öæfÆ–7B÷WF6öÖW2gFW"F†R–×÷'B†6Râ""  ¢f÷"VçG'’–âF÷væÆöG2ævWB‚&—FV×2"ÂµÒ“ ¢–bVçG'’ævWB‚'7FGW2"’–â²'VWVVB"Â'6V&6†–ær"Â&F÷væÆöF–ær'Ó ¢6öçF–çVP¢—FVÒÒÆ–Æ—7Eö—FV×2ævWB†–çB†VçG'•²&—FVÕö–B%Ò’¢–b—FVÒ—2æ÷BæöæS ¢÷&V6÷&E÷ö'W¥öGFV×B†F"Â—FVÒÂVçG'’Â¦ö%ö–B  ¦FVbfWF6…öÖ—76–æu÷G&6·2€¢F#¢6W76–öâÀ¢Æ–Æ—7C¢Æ–Æ—7BÀ¢6Æ–VçC¢ç’À¢&öw&W75ö6ÆÆ&6³¢6ÆÆ&ÆUµ¶F–7EÒÂæöæUÒÂæöæRÒæöæRÀ¢¦ö%ö–C¢–çBÂæöæRÒæöæRÀ¢&F6…ö6ö×ÆWFUö6ÆÆ&6³¢6ÆÆ&ÆUµ¶F–7BÂÆ—7EµF…ÕÒÂæöæUÒÂæöæRÒæöæRÀ¢’ÓâGWÆU¶F–7BÂÆ—7EµF…ÕÓ ¢ÆÅöÖ—76–ærÂ—FV×2ÒÖ—76–æu÷&÷f–FW%ö—FV×2†F"ÂÆ–Æ—7BÂ'ö'W¢"¢&F6…÷6—¦RÒ6WGF–æw2çö'W¥öÖ…÷G&6·5÷W%÷'Và¢&F6…ö6÷VçBÒ†ÆVâ†—FV×2’²&F6…÷6—¦RÒ’òò&F6…÷6—¦P¢VçG&–W3¢Æ—7E¶F–7E·7G"Âç•ÕÒÒ°¢°¢&—FVÕö–B#¢—FVÒæ–BÀ¢&'F—7B#¢—FVÒæ'F—7E÷&rÀ¢'F—FÆR#¢—FVÒçF—FÆU÷&rÀ¢'7FGW2#¢'VWVVB"À¢Ð¢f÷"—FVÒ–â—FV×0¢Ð¢7VÖÖ'“¢F–7E·7G"Âç•ÒÒ°¢'Æ–Æ—7Eö–B#¢Æ–Æ—7Bæ–BÀ¢'F÷FÅöÖ—76–ær#¢ÆVâ†ÆÅöÖ—76–ær’À¢&VÆ–v–&ÆU÷F÷FÂ#¢ÆVâ†—FV×2’À¢'6¶—VE÷6ÖU÷6÷W&6R#¢ÆVâ†ÆÅöÖ—76–ær’ÒÆVâ†—FV×2’À¢&&F6…÷6—¦R#¢&F6…÷6—¦RÀ¢&&F6…ö6÷VçB#¢&F6…ö6÷VçBÀ¢&7W'&VçEö&F6‚#¢À¢&7W'&VçEö&F6…÷6—¦R#¢À¢&&F6…÷&ö6W76VB#¢À¢&&F6…÷W6U÷6V6öæG2#¢À¢'&ö6W76VB#¢À¢&GFV×FVB#¢À¢&F÷væÆöFVB#¢À¢&æ÷Eöf÷VæB#¢À¢&Ö&–wV÷W2#¢À¢&f–ÆVB#¢À¢&—FV×2#¢VçG&–W2À¢Ð¢6öÆÆV7FVC¢Æ—7EµF…ÒÒµÐ¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢f÷"&F6…ö–æFW‚Â&F6…÷7F'B–âVçVÖW&FR‡&ævRƒÂÆVâ†—FV×2’Â&F6…÷6—¦R’“ ¢6öÆÆV7FVEö&Vf÷&Uö&F6‚ÒÆVâ†6öÆÆV7FVB¢&F6…ö—FV×2Ò—FV×5¶&F6…÷7F'B¢&F6…÷7F'B²&F6…÷6—¦UÐ¢&F6…öVçG&–W2ÒVçG&–W5¶&F6…÷7F'B¢&F6…÷7F'B²&F6…÷6—¦UÐ¢7VÖÖ'•²&7W'&VçEö&F6‚%ÒÒ&F6…ö–æFW‚²¢7VÖÖ'•²&7W'&VçEö&F6…÷6—¦R%ÒÒÆVâ†&F6…ö—FV×2¢7VÖÖ'•²&&F6…÷&ö6W76VB%ÒÒ ¢7VÖÖ'•²&&F6…÷W6U÷6V6öæG2%ÒÒ ¢7VÖÖ'•²&&F6…÷7FFR%ÒÒ''Vææ–ær ¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢f÷"—FVÒÂVçG'’–â¦—†&F6…ö—FV×2Â&F6…öVçG&–W2Â7G&–7CÕG'VR“ ¢VçG'•²'7FGW2%ÒÒ'6V&6†–ær ¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢VW'’Òb'¶—FVÒæ'F—7E÷&r÷"rwÒ¶—FVÒçF—FÆU÷&r÷"rwÒ"ç7G&—‚¢G'“ ¢–bæ÷BVW'“ ¢&—6Rö'W¥&÷f–FW$W'&÷"‚%Æ–Æ—7B—FVÒ†2æò'F—7B÷F—FÆRVW'’"¢7VÖÖ'•²&GFV×FVB%Ò³Ò¢6æF–FFW2Ò6V&6…÷G&6·2†6Æ–VçBÂVW'’ÂÆ–Ö—CÓ¢&W7BÂÖWF†öBÒ6†ö÷6U÷G&6µö6æF–FFR€¢'F—7E÷&sÖ—FVÒæ'F—7E÷&rÀ¢F—FÆU÷&sÖ—FVÒçF—FÆU÷&rÀ¢Æ'VÕ÷&sÖ—FVÒæÆ'VÕ÷&rÀ¢—7&3Ö—FVÒæ—7&2À¢GW&F–öåö×3Ö—FVÒæGW&F–öåö×2À¢6æF–FFW3Ö6æF–FFW2À¢¢–b&W7B—2æöæS ¢7FGW2Ò&Ö&–wV÷W2"–bÖWF†öBÓÒ&Ö&–wV÷W2"VÇ6R&æ÷Eöf÷VæB ¢7VÖÖ'•·7FGW5Ò³Ò¢VçG'•²'7FGW2%ÒÒ7FGW0¢VçG'•²'6VÆV7F–öâ%ÒÒÖWF†ö@¢VÇ6S ¢VçG'•²'ö'W¥÷G&6µö–B%ÒÒ&W7Bçö'W¥ö–@¢VçG'•²'6VÆV7F–öâ%ÒÒÖWF†ö@¢VçG'•²'7FGW2%ÒÒ&F÷væÆöF–ær ¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢f–ÆW2ÒF÷væÆöE÷G&6µ÷Fõ÷7Fv–ær€¢6Æ–VçBÀ¢&W7Bçö'W¥ö–BÀ¢6WGF–æw2çö'W¥÷7Fv–æu÷F‚À¢6WGF–æw2çö'W¥÷VÆ—G’À¢6WGF–æw2çö'W¥öVÖ&VEö'BÀ¢¢–bf–ÆW3 ¢6öÆÆV7FVBæW‡FVæB†f–ÆW2¢7VÖÖ'•²&F÷væÆöFVB%Ò³Ò¢VçG'•²'7FGW2%ÒÒ&F÷væÆöFVB ¢VçG'•²&f–ÆW2%ÒÒ·7G"‡F‚’f÷"F‚–âf–ÆW5Ð¢VÇ6S ¢7VÖÖ'•²&f–ÆVB%Ò³Ò¢VçG'•²'7FGW2%ÒÒ&f–ÆVB ¢VçG'•²&W'&÷"%ÒÒ&F÷væÆöB&öGV6VBæòfW&–f–VBVF–ò ¢W†6WBö'W¥6W'f–6TW'&÷"2W†3 ¢7VÖÖ'•²&f–ÆVB%Ò³Ò¢VçG'•²'7FGW2%ÒÒ&f–ÆVB ¢VçG'•²&W'&÷"%ÒÒG—R†W†2’åõöæÖUõð¢–bVçG'•²'7FGW2%ÒÒ&F÷væÆöFVB# ¢÷&V6÷&E÷ö'W¥öGFV×B†F"Â—FVÒÂVçG'’Â¦ö%ö–B¢7VÖÖ'•²'&ö6W76VB%Ò³Ò¢7VÖÖ'•²&&F6…÷&ö6W76VB%Ò³Ò¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢–b6WGF–æw2çö'W¥÷&WVW7EöFVÆ•÷6V6öæG3 ¢F–ÖRç6ÆVW‡6WGF–æw2çö'W¥÷&WVW7EöFVÆ•÷6V6öæG2¢–b&F6…ö6ö×ÆWFUö6ÆÆ&6²—2æ÷BæöæS ¢7VÖÖ'•²&&F6…÷7FFR%ÒÒ&G&–æ–ær ¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢&F6…ö6ö×ÆWFUö6ÆÆ&6²€¢7VÖÖ'’À¢6öÆÆV7FVE¶6öÆÆV7FVEö&Vf÷&Uö&F6ƒ¥ÒÀ¢¢–b&F6…ö–æFW‚²Â&F6…ö6÷VçC ¢7VÖÖ'•²&&F6…÷7FFR%ÒÒ'W6VB ¢7VÖÖ'•²&&F6…÷W6U÷6V6öæG2%ÒÒ6WGF–æw2çö'W¥ö&F6…öFVÆ•÷6V6öæG0¢–b&öw&W75ö6ÆÆ&6²—2æ÷BæöæS ¢&öw&W75ö6ÆÆ&6²‡7VÖÖ'’¢–b6WGF–æw2çö'W¥ö&F6…öFVÆ•÷6V6öæG3 ¢F–ÖRç6ÆVW‡6WGF–æw2çö'W¥ö&F6…öFVÆ•÷6V6öæG2¢&WGW&â7VÖÖ'’Â6öÆÆV7FV@
+                f"{normalize_artist(candidate.artist)} "
+                f"{normalize_title(f'{candidate.title} {candidate.version}'.strip())}",
+            )
+        )
+        score = min(combined, (artist_score * 0.4) + (title_score * 0.6))
+        if (
+            score >= _FUZZY_AUTO_THRESHOLD
+            and artist_score >= _FUZZY_COMPONENT_THRESHOLD
+            and title_score >= _FUZZY_COMPONENT_THRESHOLD
+        ):
+            ranked.append((score, candidate))
+    ranked.sort(key=lambda item: (item[0], item[1].quality_rank), reverse=True)
+    if not ranked:
+        return None, "not_found"
+    if len(ranked) > 1 and ranked[0][0] - ranked[1][0] < _FUZZY_AMBIGUITY_GAP:
+        top, runner_up = ranked[0][1], ranked[1][1]
+        same_recording = (
+            bool(top.isrc)
+            and top.isrc == runner_up.isrc
+        ) or top.qobuz_id == runner_up.qobuz_id
+        if not same_recording:
+            return None, "ambiguous"
+    return ranked[0][1], "fuzzy"
+
+
+def select_best_track_candidate(
+    *,
+    artist_raw: str | None,
+    title_raw: str | None,
+    duration_ms: int | None,
+    candidates: Iterable[QobuzSearchCandidate],
+    album_raw: str | None = None,
+    isrc: str | None = None,
+) -> QobuzSearchCandidate | None:
+    candidate, _reason = choose_track_candidate(
+        artist_raw=artist_raw,
+        title_raw=title_raw,
+        album_raw=album_raw,
+        isrc=isrc,
+        duration_ms=duration_ms,
+        candidates=candidates,
+    )
+    return candidate
+
+
+def verify_staging_files(files: Iterable[Path]) -> tuple[list[Path], list[dict]]:
+    verified: list[Path] = []
+    rejected: list[dict] = []
+    for file in files:
+        path = Path(file)
+        reason: str | None = None
+        if path.suffix.casefold() not in AUDIO_EXTENSIONS:
+            reason = "unsupported extension"
+        elif not path.is_file() or path.stat().st_size <= 0:
+            reason = "empty or missing file"
+        else:
+            try:
+                audio = MutagenFile(path)
+            except Exception:
+                audio = None
+            length = getattr(getattr(audio, "info", None), "length", None)
+            if audio is None:
+                reason = "mutagen could not parse the file"
+            elif not isinstance(length, (int, float)) or length <= 0:
+                reason = "audio has no duration"
+        if reason is None:
+            verified.append(path)
+        else:
+            rejected.append({"path": str(path), "reason": reason})
+    return verified, rejected
+
+
+def _sidecar_paths(relative_paths: Iterable[str], staging_dir: str | Path) -> list[Path]:
+    staging = Path(staging_dir).expanduser().resolve()
+    paths: list[Path] = []
+    for relative_path in relative_paths:
+        candidate = (staging / relative_path).resolve()
+        if not candidate.is_relative_to(staging):
+            raise QobuzProviderError("The Qobuz sidecar returned an unsafe staging path")
+        paths.append(candidate)
+    verified, rejected = verify_staging_files(paths)
+    # The sidecar may return downloaded cover art alongside the requested
+    # audio. Covers are temporary acquisition artifacts: keep unknown rejected
+    # files for inspection, but remove known image formats inside staging.
+    for entry in rejected:
+        artifact = Path(str(entry.get("path") or "")).expanduser().resolve()
+        if (
+            artifact.is_relative_to(staging)
+            and artifact.suffix.casefold() in _COVER_ART_EXTENSIONS
+        ):
+            try:
+                artifact.unlink(missing_ok=True)
+            except OSError:
+                pass
+    _cleanup_empty_staging_dirs(staging)
+    return verified
+
+
+def download_track_to_staging(
+    client: Any,
+    track_id: str,
+    staging_dir: str | Path,
+    quality: int,
+    embed_art: bool,
+) -> list[Path]:
+    try:
+        relative_paths = client.download_track(str(track_id), int(quality), embed_art)
+    except QobuzServiceError:
+        raise
+    except Exception as exc:
+        raise QobuzProviderError("Qobuz track download failed") from exc
+    return _sidecar_paths(relative_paths, staging_dir)
+
+
+def download_url_to_staging(
+    client: Any,
+    url: str,
+    staging_dir: str | Path,
+    quality: int,
+    embed_art: bool,
+) -> list[Path]:
+    try:
+        relative_paths = client.download_url(str(url), int(quality), embed_art)
+    except QobuzServiceError:
+        raise
+    except Exception as exc:
+        raise QobuzProviderError("Qobuz URL download failed") from exc
+    return _sidecar_paths(relative_paths, staging_dir)
+
+
+def _cleanup_empty_staging_dirs(staging: Path) -> None:
+    if not staging.exists():
+        return
+    directories = sorted(
+        (path for path in staging.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+
+
+def import_files_to_library(
+    files: Iterable[Path],
+    staging_dir: str | Path,
+    library_path: str | Path,
+) -> dict:
+    staging_root = Path(staging_dir).expanduser().resolve()
+    library_root = Path(library_path).expanduser().resolve()
+    library_root.mkdir(parents=True, exist_ok=True)
+    report: dict[str, list] = {"imported": [], "conflicts": [], "rejected": []}
+    for file in files:
+        source = Path(file).expanduser().resolve()
+        try:
+            relative = source.relative_to(staging_root)
+        except ValueError:
+            report["rejected"].append(
+                {"path": str(file), "reason": "file is outside the staging area"}
+            )
+            continue
+        target = (library_root / relative).resolve()
+        if not target.is_relative_to(library_root):
+            report["rejected"].append(
+                {"path": str(file), "reason": "target escapes the library root"}
+            )
+            continue
+        if target.exists():
+            report["conflicts"].append(
+                {"path": str(file), "target": str(target), "reason": "already exists"}
+            )
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        report["imported"].append(str(target))
+    _cleanup_empty_staging_dirs(staging_root)
+    return report
+
+
+def provider_lookup_key(item: PlaylistItem) -> str:
+    """Stable identity shared by equal playlist rows and future providers."""
+
+    isrc = normalize_isrc(item.isrc)
+    if isrc:
+        identity = ("isrc", isrc)
+    else:
+        identity = (
+            "metadata",
+            item.artist_norm or normalize_artist(item.artist_raw),
+            item.title_norm or normalize_title(item.title_raw),
+            item.album_norm or normalize_album(item.album_raw),
+            str(item.duration_ms or ""),
+        )
+    return hashlib.sha256("\x1f".join(identity).encode("utf-8")).hexdigest()
+
+
+def missing_provider_items(
+    db: Session, playlist: Playlist, provider: str
+) -> tuple[list[PlaylistItem], list[PlaylistItem]]:
+    statement = (
+        select(PlaylistItem)
+        .join(Match, Match.playlist_item_id == PlaylistItem.id)
+        .where(
+            PlaylistItem.playlist_id == playlist.id,
+            Match.status == MatchStatus.missing,
+        )
+        .order_by(PlaylistItem.position, PlaylistItem.id)
+    )
+    all_items = list(db.scalars(statement))
+    lookup_keys = {provider_lookup_key(item) for item in all_items}
+    attempted_keys = set()
+    if lookup_keys:
+        attempts = db.execute(
+            select(
+                ProviderAttempt.provider,
+                ProviderAttempt.lookup_key,
+                ProviderAttempt.status,
+            ).where(ProviderAttempt.lookup_key.in_(lookup_keys))
+        )
+        attempted_keys = {
+            lookup_key
+            for provider_name, lookup_key, status in attempts
+            if provider_name == provider or status in {"stored", "conflict"}
+        }
+    seen_keys = set(attempted_keys)
+    eligible: list[PlaylistItem] = []
+    for item in all_items:
+        lookup_key = provider_lookup_key(item)
+        if lookup_key in seen_keys:
+            continue
+        seen_keys.add(lookup_key)
+        eligible.append(item)
+    return all_items, eligible
+
+
+def qobuz_download_eligibility(db: Session, playlist: Playlist) -> dict[str, int]:
+    all_missing, eligible = missing_provider_items(db, playlist, "qobuz")
+    return {
+        "total_missing": len(all_missing),
+        "eligible": len(eligible),
+        "already_checked": len(all_missing) - len(eligible),
+    }
+
+
+def mark_downloads_stored(
+    downloads: dict,
+    import_report: dict,
+    staging_dir: str | Path,
+    library_path: str | Path,
+) -> None:
+    """Promote per-track download states after files move into the library."""
+
+    staging_root = Path(staging_dir).expanduser().resolve()
+    library_root = Path(library_path).expanduser().resolve()
+    imported = {
+        str(Path(path).expanduser().resolve()) for path in import_report["imported"]
+    }
+    conflicts = {
+        str(Path(entry["target"]).expanduser().resolve())
+        for entry in import_report["conflicts"]
+    }
+    stored = 0
+    conflicted = 0
+    import_failed = 0
+    for entry in downloads.get("items", []):
+        files = [Path(path).expanduser().resolve() for path in entry.pop("files", [])]
+        if files:
+            entry["file_count"] = len(files)
+        if entry.get("status") != "downloaded":
+            continue
+        targets: list[str] = []
+        try:
+            targets = [
+                str((library_root / source.relative_to(staging_root)).resolve())
+                for source in files
+            ]
+        except ValueError:
+            targets = []
+        if targets and all(target in imported for target in targets):
+            entry["status"] = "stored"
+            stored += 1
+        elif targets and any(target in conflicts for target in targets):
+            entry["status"] = "conflict"
+            conflicted += 1
+        else:
+            entry["status"] = "failed"
+            entry["error"] = "library import failed"
+            import_failed += 1
+    entries = downloads.get("items", [])
+    downloads["stored"] = sum(entry.get("status") == "stored" for entry in entries)
+    downloads["conflicts"] = sum(
+        entry.get("status") == "conflict" for entry in entries
+    )
+    downloads["import_failed"] = sum(
+        entry.get("error") == "library import failed" for entry in entries
+    )
+
+
+def _record_qobuz_attempt(
+    db: Session,
+    item: PlaylistItem,
+    entry: dict,
+    job_id: int | None,
+) -> None:
+    lookup_key = provider_lookup_key(item)
+    attempt = db.scalar(
+        select(ProviderAttempt).where(
+            ProviderAttempt.provider == "qobuz",
+            ProviderAttempt.lookup_key == lookup_key,
+        )
+    )
+    if attempt is None:
+        attempt = ProviderAttempt(provider="qobuz", lookup_key=lookup_key)
+        db.add(attempt)
+    attempt.playlist_item_id = item.id
+    attempt.job_id = job_id
+    attempt.status = str(entry.get("status") or "failed")
+    attempt.provider_item_id = entry.get("qobuz_track_id")
+    attempt.selection_method = entry.get("selection")
+    attempt.error_code = entry.get("error")
+    db.flush()
+
+
+def record_qobuz_download_attempts(
+    db: Session,
+    downloads: dict,
+    playlist_items: dict[int, PlaylistItem],
+    job_id: int | None,
+) -> None:
+    """Persist final stored/conflict outcomes after the import phase."""
+
+    for entry in downloads.get("items", []):
+        if entry.get("status") in {"queued", "searching", "downloading"}:
+            continue
+        item = playlist_items.get(int(entry["item_id"]))
+        if item is not None:
+            _record_qobuz_attempt(db, item, entry, job_id)
+
+
+def fetch_missing_tracks(
+    db: Session,
+    playlist: Playlist,
+    client: Any,
+    progress_callback: Callable[[dict], None] | None = None,
+    job_id: int | None = None,
+    batch_complete_callback: Callable[[dict, list[Path]], None] | None = None,
+) -> tuple[dict, list[Path]]:
+    all_missing, items = missing_provider_items(db, playlist, "qobuz")
+    batch_size = settings.qobuz_max_tracks_per_run
+    batch_count = (len(items) + batch_size - 1) // batch_size
+    entries: list[dict[str, Any]] = [
+        {
+            "item_id": item.id,
+            "artist": item.artist_raw,
+            "title": item.title_raw,
+            "status": "queued",
+        }
+        for item in items
+    ]
+    summary: dict[str, Any] = {
+        "playlist_id": playlist.id,
+        "total_missing": len(all_missing),
+        "eligible_total": len(items),
+        "skipped_same_source": len(all_missing) - len(items),
+        "batch_size": batch_size,
+        "batch_count": batch_count,
+        "current_batch": 0,
+        "current_batch_size": 0,
+        "batch_processed": 0,
+        "batch_pause_seconds": 0,
+        "processed": 0,
+        "attempted": 0,
+        "downloaded": 0,
+        "not_found": 0,
+        "ambiguous": 0,
+        "failed": 0,
+        "items": entries,
+    }
+    collected: list[Path] = []
+    if progress_callback is not None:
+        progress_callback(summary)
+    for batch_index, batch_start in enumerate(range(0, len(items), batch_size)):
+        collected_before_batch = len(collected)
+        batch_items = items[batch_start : batch_start + batch_size]
+        batch_entries = entries[batch_start : batch_start + batch_size]
+        summary["current_batch"] = batch_index + 1
+        summary["current_batch_size"] = len(batch_items)
+        summary["batch_processed"] = 0
+        summary["batch_pause_seconds"] = 0
+        summary["batch_state"] = "running"
+        if progress_callback is not None:
+            progress_callback(summary)
+        for item, entry in zip(batch_items, batch_entries, strict=True):
+            entry["status"] = "searching"
+            if progress_callback is not None:
+                progress_callback(summary)
+            query = f"{item.artist_raw or ''} {item.title_raw or ''}".strip()
+            try:
+                if not query:
+                    raise QobuzProviderError("Playlist item has no artist/title query")
+                summary["attempted"] += 1
+                candidates = search_tracks(client, query, limit=10)
+                best, method = choose_track_candidate(
+                    artist_raw=item.artist_raw,
+                    title_raw=item.title_raw,
+                    album_raw=item.album_raw,
+                    isrc=item.isrc,
+                    duration_ms=item.duration_ms,
+                    candidates=candidates,
+                )
+                if best is None:
+                    status = "ambiguous" if method == "ambiguous" else "not_found"
+                    summary[status] += 1
+                    entry["status"] = status
+                    entry["selection"] = method
+                else:
+                    entry["qobuz_track_id"] = best.qobuz_id
+                    entry["selection"] = method
+                    entry["status"] = "downloading"
+                    if progress_callback is not None:
+                        progress_callback(summary)
+                    files = download_track_to_staging(
+                        client,
+                        best.qobuz_id,
+                        settings.qobuz_staging_path,
+                        settings.qobuz_quality,
+                        settings.qobuz_embed_art,
+                    )
+                    if files:
+                        collected.extend(files)
+                        summary["downloaded"] += 1
+                        entry["status"] = "downloaded"
+                        entry["files"] = [str(path) for path in files]
+                    else:
+                        summary["failed"] += 1
+                        entry["status"] = "failed"
+                        entry["error"] = "download produced no verified audio"
+            except QobuzServiceError as exc:
+                summary["failed"] += 1
+                entry["status"] = "failed"
+                entry["error"] = type(exc).__name__
+            if entry["status"] != "downloaded":
+                _record_qobuz_attempt(db, item, entry, job_id)
+            summary["processed"] += 1
+            summary["batch_processed"] += 1
+            if progress_callback is not None:
+                progress_callback(summary)
+            if settings.qobuz_request_delay_seconds:
+                time.sleep(settings.qobuz_request_delay_seconds)
+        if batch_complete_callback is not None:
+            summary["batch_state"] = "draining"
+            if progress_callback is not None:
+                progress_callback(summary)
+            batch_complete_callback(
+                summary,
+                collected[collected_before_batch:],
+            )
+        if batch_index + 1 < batch_count:
+            summary["batch_state"] = "paused"
+            summary["batch_pause_seconds"] = settings.qobuz_batch_delay_seconds
+            if progress_callback is not None:
+                progress_callback(summary)
+            if settings.qobuz_batch_delay_seconds:
+                time.sleep(settings.qobuz_batch_delay_seconds)
+    return summary, collected
