@@ -250,6 +250,34 @@ def test_search_pagination_empty_results_and_ready_playlist_duplicates(
     assert empty == {"artist": [], "album": [], "song": []}
 
 
+def test_unknown_optional_numeric_metadata_is_omitted_instead_of_null(
+    api_client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("app.services.delivery.settings.music_library_path", str(tmp_path))
+    _user, key, _playlist, _artist, album, track, _item, _content = _seed(db, tmp_path)
+    album.year = None
+    track.track_no = None
+    track.disc_no = None
+    file = db.scalar(select(File).where(File.track_id == track.id))
+    file.bit_depth = None
+    file.sample_rate = None
+    db.commit()
+
+    result = api_client.get(
+        "/rest/search3.view",
+        params=_params(
+            key,
+            query='""',
+            artistCount="500",
+            albumCount="500",
+            songCount="500",
+        ),
+    ).json()["subsonic-response"]["searchResult3"]
+    assert "year" not in result["album"][0]
+    for name in ("year", "track", "discNumber", "bitDepth", "samplingRate"):
+        assert name not in result["song"][0]
+
+
 def test_all_foreign_and_missing_ids_are_indistinguishable(
     api_client, db, tmp_path, monkeypatch
 ):

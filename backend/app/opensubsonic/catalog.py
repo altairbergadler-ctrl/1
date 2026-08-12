@@ -135,6 +135,10 @@ def changed(value) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _omit_none(values: dict) -> dict:
+    return {key: value for key, value in values.items() if value is not None}
+
+
 def song_dto(track: Track) -> dict:
     file, path, remote = best_playable_file(track)
     suffix = playable_file_suffix(file, path, remote) or "flac"
@@ -149,7 +153,7 @@ def song_dto(track: Track) -> dict:
     }.get(suffix, "application/octet-stream")
     album = track.album
     artist = album.artist
-    return {
+    return _omit_none({
         "id": song_id(track),
         "parent": album_id(album),
         "title": track.title,
@@ -172,7 +176,7 @@ def song_dto(track: Track) -> dict:
         "samplingRate": file.sample_rate,
         "transcodedContentType": None,
         "transcodedSuffix": None,
-    }
+    })
 
 
 def album_created_at(songs: list[Track]) -> datetime | None:
@@ -186,7 +190,7 @@ def album_created_at(songs: list[Track]) -> datetime | None:
 
 
 def album_dto(album: Album, songs: list[Track]) -> dict:
-    return {
+    return _omit_none({
         "id": album_id(album),
         "parent": artist_id(album.artist),
         "name": album.title,
@@ -199,7 +203,7 @@ def album_dto(album: Album, songs: list[Track]) -> dict:
         "created": changed(album_created_at(songs)),
         "year": album.year,
         "isDir": True,
-    }
+    })
 
 
 def artist_dto(artist: Artist, albums: list[Album]) -> dict:
