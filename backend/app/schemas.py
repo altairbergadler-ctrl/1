@@ -34,6 +34,7 @@ class UserAdminOut(BaseModel):
     display_name: str | None = None
     role: Literal["owner", "user"]
     state: Literal["pending", "active", "disabled"]
+    is_bootstrap_owner: bool
     created_at: datetime
     activated_at: datetime | None = None
     last_login_at: datetime | None = None
@@ -44,12 +45,11 @@ class UserAdminListOut(BaseModel):
     items: list[UserAdminOut]
 
 
-class UserInviteIn(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-    role: Literal["owner", "user"] = "user"
+class UserRoleUpdateIn(BaseModel):
+    role: Literal["owner", "user"]
 
 
-class RecoveryOwnerInvitationIn(BaseModel):
+class RecoveryOwnerBindingIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     confirm: Literal["RESET BOOTSTRAP OWNER"]
 

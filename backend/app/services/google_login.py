@@ -1,4 +1,4 @@
-"""Google OpenID Connect login with PKCE and invitation-only binding."""
+"""Google OpenID Connect login with PKCE and public user registration."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import GoogleLoginAttempt, User, UserState, utcnow
+from app.models import GoogleLoginAttempt, User, UserRole, UserState, utcnow
 from app.services.authentication import (
     AuthenticationError,
     keyed_digest,
@@ -63,7 +63,7 @@ class GoogleLoginUnavailable(GoogleLoginError):
     pass
 
 
-class GoogleAccountNotInvited(GoogleLoginError):
+class GoogleAccountDisabled(GoogleLoginError):
     pass
 
 
@@ -479,27 +479,45 @@ def complete_google_login(
     user = db.scalar(
         select(User).where(User.google_sub == identity.sub).with_for_update()
     )
-    # Email is used exactly once to bind a pending invitation. Every later login
-    # resolves the stable Google subject, so an email change cannot create a
+    # Every returning login resolves the stable Google subject. Email is only a
+    # bootstrap binding for the recovery owner or a uniqueness guard for a new
+    # public registration, so a later Google email change cannot create a
     # second application identity.
     if user is not None:
         if user.state != UserState.active:
-            raise GoogleAccountNotInvited("Google account is not allowed")
+            raise GoogleAccountDisabled("Google account is disabled")
     else:
         user = db.scalar(
             select(User)
-            .where(
-                User.email_key == email_key,
-                User.state == UserState.pending,
-                User.google_sub.is_(None),
-            )
+            .where(User.email_key == email_key)
             .with_for_update()
         )
-        if user is None:
-            raise GoogleAccountNotInvited("Google account is not allowed")
-        user.google_sub = identity.sub
-        user.state = UserState.active
-        user.activated_at = utcnow()
+        if user is not None:
+            if user.state == UserState.disabled:
+                raise GoogleAccountDisabled("Google account is disabled")
+            if user.state != UserState.pending or user.google_sub is not None:
+                raise GoogleIdentityError("Google identity conflicts with an existing account")
+            user.google_sub = identity.sub
+            user.state = UserState.active
+            user.activated_at = utcnow()
+            if not user.is_bootstrap_owner:
+                # Legacy pending accounts must not preserve a preassigned
+                # elevated role after public registration replaces allowlisting.
+                user.role = UserRole.user
+        else:
+            now = utcnow()
+            user = User(
+                email=identity.email,
+                email_key=email_key,
+                google_sub=identity.sub,
+                display_name=identity.display_name,
+                role=UserRole.user,
+                state=UserState.active,
+                is_bootstrap_owner=False,
+                created_at=now,
+                activated_at=now,
+            )
+            db.add(user)
     if identity.display_name:
         user.display_name = identity.display_name
     user.last_login_at = utcnow()

@@ -171,14 +171,15 @@ Google требует два независимых Web OAuth clients:
   `PWA -> Хранилище`, шифруются storage vault, callback
   `https://audiofeel.su/api/storage/google/callback`.
 
-Сначала через отдельный `/#/recovery` с `APP_AUTH_TOKEN` задаётся invitation
+Сначала через отдельный `/#/recovery` с `APP_AUTH_TOKEN` задаётся Google email
 bootstrap owner. После успешного Google-входа recovery остаётся только
-аварийным механизмом. Не приглашённый account не создаёт user.
+аварийным механизмом. Все остальные подтверждённые Google identity
+регистрируются автоматически как `user`.
 
 Полный Console/setup/session/CSRF/ownership и двухаккаунтный acceptance runbook:
 `docs/google-user-auth.md`.
 
-## Проверенный двухаккаунтный production gate
+## Исторический двухаккаунтный production gate
 
 ## OpenSubsonic deployment gate
 
@@ -213,12 +214,26 @@ Rollback приложения выполняется вместе с downgrade �
 этого утрачиваются и создаются заново. Multi-user downgrade ниже 0009 остаётся
 запрещён прежним production-контрактом.
 
-На 2026-08-12 в production выполнен полный runbook: test-user allowlist,
+На 2026-08-12 в production выполнен прежний invitation-only runbook: test-user allowlist,
 неприглашённый `403` без DB side effects, owner invitation, first-login binding,
 двусторонние IDOR-пробы, shared-File Range delivery, независимый Spotify vault,
 disable/revoke и повторный `403`. Drive account после проверки остался enabled
 и healthy. В логах не найдено exact/generic email, unredacted OAuth query values
 или session-cookie values.
+
+Перед включением открытой регистрации в production отдельно проверить:
+
+1. **Audiofeel Login** имеет Audience=`External` и publishing status production;
+   Drive OAuth client и его Test users не изменять.
+2. Ранее неизвестный подтверждённый Google account создаётся как `active user`
+   без предварительной строки в `users`.
+3. Новый `user` получает `403` на `/api/admin/*`, `/api/providers/*`,
+   `/api/storage/*` и `/api/library/*`, но работает со своими playlist/player API.
+4. Owner promotion/demotion отзывает прежнюю web session, self/bootstrap/last
+   owner protections возвращают `409`.
+5. Disabled identity повторно получает `403`; cross-user ID остаются `404`.
+6. В Caddy/backend/frontend logs отсутствуют email, OAuth code/state, ID/access
+   token, session cookie и CSRF values; local, GitHub и deployed SHA совпадают.
 
 После появления второго identity schema downgrade больше не применяется:
 rollback выполняется только через остановку writes, предыдущий release SHA и

@@ -1,4 +1,4 @@
-"""Security contract tests for invitation-only Google OpenID Connect login."""
+"""Security contract tests for public Google OpenID Connect registration."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from app.services import google_login
 from app.services.authentication import keyed_digest, open_login_value, seal_login_value
 from app.services.google_login import (
     EXPECTED_ISSUER,
-    GoogleAccountNotInvited,
+    GoogleAccountDisabled,
     GoogleIdentity,
     GoogleIdentityError,
     GoogleLoginStateError,
@@ -348,16 +348,16 @@ def _login_attempt(db, suffix: str):
     return state, binding
 
 
-def test_invitation_binding_uses_email_once_then_stable_google_sub(db, monkeypatch):
-    invited = User(
-        email="Invited@Example.Test",
-        email_key="invited@example.test",
-        role=UserRole.user,
+def test_pending_owner_binding_uses_email_once_then_stable_google_sub(db, monkeypatch):
+    owner = User(
+        email="Owner@Example.Test",
+        email_key="owner@example.test",
+        role=UserRole.owner,
         state=UserState.pending,
-        is_bootstrap_owner=False,
+        is_bootstrap_owner=True,
         created_at=utcnow(),
     )
-    db.add(invited)
+    db.add(owner)
     db.commit()
     monkeypatch.setattr(
         google_login,
@@ -368,7 +368,7 @@ def test_invitation_binding_uses_email_once_then_stable_google_sub(db, monkeypat
     )
     identities = iter(
         [
-            GoogleIdentity("stable-google-sub", "invited@example.test", "First Name"),
+            GoogleIdentity("stable-google-sub", "owner@example.test", "First Name"),
             GoogleIdentity("stable-google-sub", "changed@example.test", "New Name"),
         ]
     )
@@ -394,14 +394,15 @@ def test_invitation_binding_uses_email_once_then_stable_google_sub(db, monkeypat
 
     assert first.id == second.id
     assert second.google_sub == "stable-google-sub"
-    assert second.email == "Invited@Example.Test"
+    assert second.email == "Owner@Example.Test"
     assert second.display_name == "New Name"
+    assert second.role == UserRole.owner
     assert second.state == UserState.active
     assert db.query(User).count() == 1
 
 
-def test_uninvited_google_account_does_not_create_user(db, monkeypatch):
-    state, binding = _login_attempt(db, "uninvited")
+def test_new_google_account_registers_as_active_user(db, monkeypatch):
+    state, binding = _login_attempt(db, "registration")
     monkeypatch.setattr(
         google_login,
         "_exchange_code",
@@ -413,20 +414,98 @@ def test_uninvited_google_account_does_not_create_user(db, monkeypatch):
         google_login,
         "validate_google_id_token",
         lambda *args, **kwargs: GoogleIdentity(
-            "unknown-google-sub", "unknown@example.test", None
+            "new-google-sub", "new-user@example.test", "New User"
         ),
     )
 
-    with pytest.raises(GoogleAccountNotInvited):
-        google_login.complete_google_login(
-            db, state=state, binding=binding, code="code"
-        )
+    registered = google_login.complete_google_login(
+        db, state=state, binding=binding, code="code"
+    )
 
-    assert db.query(User).count() == 0
+    assert registered.email == "new-user@example.test"
+    assert registered.google_sub == "new-google-sub"
+    assert registered.display_name == "New User"
+    assert registered.role == UserRole.user
+    assert registered.state == UserState.active
+    assert registered.activated_at is not None
+    assert db.query(User).count() == 1
     with pytest.raises(GoogleLoginStateError):
         google_login.complete_google_login(
             db, state=state, binding=binding, code="code"
         )
+
+
+def test_legacy_pending_owner_invitation_is_activated_as_user(db, monkeypatch):
+    legacy = User(
+        email="legacy@example.test",
+        email_key="legacy@example.test",
+        role=UserRole.owner,
+        state=UserState.pending,
+        is_bootstrap_owner=False,
+        created_at=utcnow(),
+    )
+    db.add(legacy)
+    db.commit()
+    state, binding = _login_attempt(db, "legacy")
+    monkeypatch.setattr(
+        google_login,
+        "_exchange_code",
+        lambda code, verifier: google_login.GoogleTokenResponse(
+            id_token="id-token", access_token="access-token"
+        ),
+    )
+    monkeypatch.setattr(
+        google_login,
+        "validate_google_id_token",
+        lambda *args, **kwargs: GoogleIdentity(
+            "legacy-google-sub", "legacy@example.test", None
+        ),
+    )
+
+    registered = google_login.complete_google_login(
+        db, state=state, binding=binding, code="code"
+    )
+
+    assert registered.id == legacy.id
+    assert registered.role == UserRole.user
+    assert registered.state == UserState.active
+
+
+def test_disabled_google_account_cannot_register_again(db, monkeypatch):
+    disabled = User(
+        email="disabled@example.test",
+        email_key="disabled@example.test",
+        google_sub="disabled-google-sub",
+        role=UserRole.user,
+        state=UserState.disabled,
+        is_bootstrap_owner=False,
+        created_at=utcnow(),
+        activated_at=utcnow(),
+    )
+    db.add(disabled)
+    db.commit()
+    state, binding = _login_attempt(db, "disabled")
+    monkeypatch.setattr(
+        google_login,
+        "_exchange_code",
+        lambda code, verifier: google_login.GoogleTokenResponse(
+            id_token="id-token", access_token="access-token"
+        ),
+    )
+    monkeypatch.setattr(
+        google_login,
+        "validate_google_id_token",
+        lambda *args, **kwargs: GoogleIdentity(
+            "disabled-google-sub", "disabled@example.test", None
+        ),
+    )
+
+    with pytest.raises(GoogleAccountDisabled):
+        google_login.complete_google_login(
+            db, state=state, binding=binding, code="code"
+        )
+
+    assert db.query(User).count() == 1
 
 
 def test_callback_rotates_to_secure_server_cookie_without_logging_identity(

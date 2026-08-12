@@ -27,7 +27,7 @@ from app.schemas import (
     CurrentUserOut,
     LoginIn,
     LoginOut,
-    RecoveryOwnerInvitationIn,
+    RecoveryOwnerBindingIn,
 )
 from app.services.authentication import (
     AuthenticationError,
@@ -40,7 +40,7 @@ from app.services.authentication import (
     session_for_token,
 )
 from app.services.google_login import (
-    GoogleAccountNotInvited,
+    GoogleAccountDisabled,
     GoogleIdentityError,
     GoogleLoginConfigurationError,
     GoogleLoginStateError,
@@ -164,11 +164,11 @@ def google_callback(
             binding=binding,
             code=code,
         )
-    except GoogleAccountNotInvited:
+    except GoogleAccountDisabled:
         db.rollback()
         response = _auth_error_page(
             403,
-            "Этот аккаунт не приглашён. Обратитесь к владельцу сервиса.",
+            "Эта учётная запись отключена владельцем сервиса.",
         )
         _delete_cookie(response, name=OIDC_BINDING_COOKIE_NAME, path="/api/auth/google/callback")
         return response
@@ -294,14 +294,14 @@ def recovery_status(
     _no_store(response)
     owner = record.user
     return {
-        "owner_invited": bool(owner.email),
+        "owner_configured": bool(owner.email),
         "owner_active": owner.state == UserState.active,
     }
 
 
-@router.post("/recovery/owner-invitation", status_code=status.HTTP_204_NO_CONTENT)
-def recovery_owner_invitation(
-    payload: RecoveryOwnerInvitationIn,
+@router.post("/recovery/owner-binding", status_code=status.HTTP_204_NO_CONTENT)
+def recovery_owner_binding(
+    payload: RecoveryOwnerBindingIn,
     response: Response,
     record: UserSession = Depends(require_recovery_csrf),
     db: Session = Depends(get_db),
@@ -323,7 +323,7 @@ def recovery_owner_invitation(
         )
     )
     if duplicate:
-        raise HTTPException(status_code=409, detail="Invitation cannot be updated")
+        raise HTTPException(status_code=409, detail="Owner binding cannot be updated")
     owner.email = email
     owner.email_key = email_key
     owner.google_sub = None
@@ -337,7 +337,7 @@ def recovery_owner_invitation(
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=409, detail="Invitation cannot be updated"
+            status_code=409, detail="Owner binding cannot be updated"
         ) from exc
     _delete_cookie(response, name=RECOVERY_COOKIE_NAME, path="/api/auth/recovery")
     _no_store(response)

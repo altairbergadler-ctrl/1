@@ -54,7 +54,7 @@ session-bound `X-CSRF-Token`; в production установлено
 `AUTH_COOKIE_SECURE=true`.
 
 `APP_AUTH_TOKEN` не является Bearer и не открывает обычный API. Он используется
-только отдельным краткоживущим `/#/recovery` для первоначального приглашения и
+только отдельным краткоживущим `/#/recovery` для первоначальной привязки и
 аварийного восстановления bootstrap owner.
 
 - `POST /api/library/scan` — owner-only фоновое сканирование;
@@ -145,11 +145,11 @@ review; ручные решения повторный запуск не пер�
 
 ## PWA
 
-Мобильный интерфейс включает invitation-only «Войти через Google», текущего
-пользователя, logout, список личных плейлистов с прогрессом, статусы
+Мобильный интерфейс включает открытую регистрацию через подтверждённый Google
+аккаунт, текущего пользователя, logout, список личных плейлистов с прогрессом, статусы
 READY/REVIEW/MISSING, ручной review и скачивание трека, ZIP или M3U8. Owner
 дополнительно видит разделы «Пользователи», «Провайдеры» и «Хранилище»: можно
-создать приглашение, отключить пользователя и отозвать все его sessions.
+назначить роль `owner | user`, отключить пользователя и отозвать все его sessions.
 Service Worker кэширует только оболочку приложения; API и музыкальные файлы в
 кэш не попадают. Session и CSRF tokens не записываются в Web Storage. Nginx
 проксирует `/api/` в том же origin и полностью отключает access log, поэтому
@@ -171,11 +171,13 @@ Google login использует отдельный OAuth/OIDC client и callba
 Полная схема, endpoint matrix и production runbook —
 [`docs/google-user-auth.md`](docs/google-user-auth.md).
 
-Двухаккаунтная production-приёмка завершена 2026-08-12: invitation-only first
-login, no-auto-registration `403`, двусторонний cross-user `404`, общий
+Историческая двухаккаунтная production-приёмка 2026-08-12 проверила прежний
+invitation-only вход, двусторонний cross-user `404`, общий
 дедуплицированный `File`, раздельные Spotify credentials и немедленный
-session revoke при disable проверены на реальных Google identity. Безопасные
-доказательства и итоговое состояние записаны в
+session revoke при disable на реальных Google identity. После перехода на
+открытую регистрацию требуется повторный production gate: новый Google-аккаунт
+должен автоматически получить `user`, а owner-only API — вернуть ему `403`.
+Безопасные доказательства и итоговое состояние записаны в
 [`docs/music-service-handoff.md`](docs/music-service-handoff.md).
 
 ## Qobuz
@@ -377,7 +379,7 @@ acceptance — повторная sync для загрузки изображе�
 - `backend/app/services/scanner.py` — локальный lossless-каталог
 - `backend/app/services/musicbrainz.py` — внешнее обогащение и Redis-кэш
 - `backend/app/services/spotify.py` — OAuth, refresh токенов и импорт Spotify
-- `backend/app/services/google_login.py` — OIDC discovery/JWKS/PKCE и invitation binding
+- `backend/app/services/google_login.py` — OIDC discovery/JWKS/PKCE, публичная регистрация и stable-sub binding
 - `backend/app/services/authentication.py` — hashed server sessions и CSRF
 - `backend/app/services/user_credentials.py` — user-scoped provider vault
 - `backend/app/services/playlist_converter.py` — CSV/M3U/текстовый импорт

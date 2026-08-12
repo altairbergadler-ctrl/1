@@ -7,11 +7,12 @@ Music Service работает по правилу **shared bytes, private right
 дедуплицированным каталогом. Право увидеть плейлист, source, job или получить
 файл определяется отдельно для текущего пользователя.
 
-Публичной регистрации нет. Владелец заранее создаёт приглашение по Google
-email. При первом успешном входе подтверждённый email используется только для
-поиска pending-приглашения; затем пользователь определяется по неизменяемому
-Google `sub`. Смена email у уже привязанного Google-аккаунта не создаёт второго
-пользователя.
+Регистрация публичная: любой Google-аккаунт с `email_verified=true` при первом
+успешном входе создаёт активного пользователя с ролью `user`. После регистрации
+пользователь определяется по неизменяемому Google `sub`; смена email у уже
+привязанного Google-аккаунта не создаёт второго пользователя. Email остаётся
+уникальным ключом только при первичной регистрации и при recovery-привязке
+bootstrap owner.
 
 ## Два независимых Google OAuth-контура
 
@@ -36,8 +37,9 @@ Google access token используется только в памяти для
 ## Настройка Google Cloud Console
 
 1. Открыть `Google Auth Platform -> Branding` и настроить приложение проекта.
-2. В `Audience` выбрать нужный режим. Если приложение в Testing, добавить оба
-   реальных Google-аккаунта приёмки в Test users.
+2. В `Audience` выбрать `External` и перевести **Audiofeel Login** в production.
+   Режим `Testing` с `Test users` не считается открытой регистрацией и годится
+   только для ограниченной staging-приёмки.
 3. В `Clients` создать **новый** client типа `Web application` с именем
    `Audiofeel Login`.
 4. В Authorized JavaScript origins добавить только `https://audiofeel.su`.
@@ -75,9 +77,10 @@ Callback проверяет:
 - одноразовые state и browser binding, nonce и PKCE verifier;
 - `email_verified=true`, корректные `sub` и email.
 
-Данные профиля из браузера не принимаются. Не приглашённый аккаунт получает
-нейтральный `403`, строка `users` не создаётся, список разрешённых email не
-раскрывается.
+Данные профиля из браузера не принимаются. Новый подтверждённый identity
+атомарно создаёт `active user`; отключённый identity получает нейтральный `403`
+и не может повторно зарегистрироваться. Совпадение email с другим уже
+привязанным `sub` отклоняется как identity conflict, а не захватывает аккаунт.
 
 ## Схема данных
 
@@ -93,6 +96,24 @@ Callback проверяет:
 - `state`: `pending | active | disabled`;
 - `is_bootstrap_owner` (не более одной строки);
 - `created_at`, `activated_at`, `last_login_at`.
+
+### Ролевая модель
+
+| Возможность | `user` | `owner` |
+|---|---:|---:|
+| Вход, личные sources/playlists, import и matching | да | да |
+| Личные Qobuz/Yandex acquisition requests и jobs | да | да |
+| Личные download grants и OpenSubsonic player keys | да | да |
+| Список пользователей, роли, disable и revoke sessions | нет | да |
+| System provider credentials и health/rotation | нет | да |
+| Library scan и system jobs | нет | да |
+| Google Drive infrastructure accounts/migration | нет | да |
+
+Первый публичный вход всегда выдаёт `user`; назначить `owner` может только
+действующий `owner` и только уже активному аккаунту. Изменение роли отзывает web sessions цели, bootstrap owner
+не понижается, а последний активный owner не может быть понижен или отключён.
+Client-side скрытие навигации — только UX: каждое owner-only API независимо
+проверяет роль на backend и возвращает `403`.
 
 `user_sessions`:
 
@@ -151,7 +172,7 @@ raw player API key в ответе на создание устройства; l
 | Qobuz/Yandex acquisition status/request | owner/user | request/job/playlist принадлежат current user |
 | track/album/playlist ZIP/M3U8 | owner/user | только через собственный READY grant |
 | `/api/jobs/{id}` | owner/user | собственные jobs; owner дополнительно видит system jobs |
-| `/api/admin/*` | owner | invitations, disable, session revocation |
+| `/api/admin/*` | owner | role changes, disable, session revocation |
 | `/api/providers/*`, `/api/storage/*`, `/api/library/*` | owner | system/infrastructure only |
 | `/rest/*` | отдельный active player credential | browse/search/media только через собственный READY grant; foreign ID = missing ID |
 
@@ -168,8 +189,8 @@ session-bound `X-CSRF-Token`. `SameSite=Lax` — дополнительный, �
 - `HttpOnly`, `Secure` в production, `SameSite=Lax`, `Path=/api`;
 - default absolute TTL 30 дней, idle TTL 7 дней, touch не чаще 5 минут;
 - logout ставит `revoked_at` до удаления cookie;
-- disable/revoke sessions немедленно отзывает web sessions; disable пользователя
-  также отзывает все его player credentials;
+- role change/disable/revoke sessions немедленно отзывает web sessions; disable
+  пользователя также отзывает все его player credentials;
 - после рестарта контейнера отозванная cookie остаётся недействительной.
 
 PWA получает CSRF token через `/api/auth/me` и держит его только в памяти.
@@ -198,8 +219,8 @@ UUID для artist/album/song/playlist и playlist sync metadata. Миграци
 - recovery cookie имеет `Path=/api/auth/recovery`, absolute TTL 15 минут и idle
   TTL 5 минут;
 - вход ротирует предыдущую recovery session;
-- разрешены только замена pending email bootstrap owner и отзыв его sessions;
-- установка нового invitation отвязывает прежний `sub`, отзывает все sessions
+- разрешены только замена recovery email bootstrap owner и отзыв его sessions;
+- установка новой owner binding отвязывает прежний `sub`, отзывает все sessions
   владельца и удаляет recovery cookie;
 - recovery не создаёт новых пользователей и не даёт общий owner-контекст
   обычным API.
@@ -289,14 +310,15 @@ library/Drive objects и автоматическое удаление user data
 2. Alembic current=head=`0009_google_user_auth_contract`;
 3. owner data/IDs/counts и File SHA-1 сохранились;
 4. owner входит реальным Google account;
-5. второй заранее приглашённый account проходит first login и получает свой
-   `sub` binding;
-6. не приглашённый account получает `403`, users count не меняется;
+5. новый ранее неизвестный account проходит first login, создаётся как
+   `active user` и получает свой `sub` binding;
+6. `user` получает `403` на admin/provider/storage/library API и не может сам
+   повысить роль;
 7. A/B cross-user playlist/source/job/item/download probes дают `404`;
 8. общий физический трек выдаётся обоим через разные READY grants без второго
    `File`;
 9. manual import и Spotify credentials изолированы по user;
-10. disable, revoke sessions и logout действуют немедленно;
+10. role change, disable, revoke sessions и logout действуют немедленно;
 11. replay state, bad nonce/audience/azp/signature, expired token,
     `email_verified=false` и CSRF failures отклоняются;
 12. Login и Drive OAuth продолжают работать независимыми clients;
@@ -304,10 +326,9 @@ library/Drive objects и автоматическое удаление user data
 14. полный Docker pytest и live-PWA проходят;
 15. local SHA, GitHub branch SHA и deployed release SHA совпадают.
 
-Production snapshot 2026-08-12: все пункты 1–15 проверены с двумя реальными
-Google identity. До invitation второй account получил нейтральный HTTP `403`
-без создания user/session; после invitation его подтверждённый identity был
-связан с pending user по стабильному `sub`. Двусторонние A/B-пробы вернули
+Production snapshot 2026-08-12 относится к предыдущему invitation-only flow:
+его isolation, session и IDOR-инварианты проверены с двумя реальными Google
+identity. Двусторонние A/B-пробы вернули
 `404` для чужих playlist/item/job/download ID, manual import остался личным,
 а один общий `File` выдан обоим через разные READY grants без изменения files
 count. Второй Spotify OAuth создал отдельную user credential и не изменил
@@ -316,3 +337,6 @@ owner envelope. Disable отозвал живую session немедленно (
 `403`. Drive account остался healthy и отдельным от Login OAuth. Exact и
 generic leak scans после обоих flows дали 0 для email, credentials, OAuth
 query values и session cookies.
+
+Переход на открытую регистрацию требует нового production gate по пунктам 5,
+6 и 10 выше; до его завершения нельзя считать live-регистрацию подтверждённой.

@@ -157,10 +157,10 @@ function renderLogin(message = "") {
       <section class="login-panel">
         <p class="eyebrow">ВАША ФОНОТЕКА · БЕЗ ПОТЕРЬ</p>
         <h1>Музыка уже дома.</h1>
-        <p class="lede">Войдите приглашённым Google-аккаунтом. Пароль и токены Google обрабатываются только на стороне Google.</p>
+        <p class="lede">Войдите через Google — новый аккаунт будет зарегистрирован автоматически с ролью пользователя. Пароль и токены Google обрабатываются только на стороне Google.</p>
         <a class="button google-sign-in" href="/api/auth/google/start">Войти через Google</a>
         <p class="form-error" role="alert">${escapeHtml(message)}</p>
-        <p class="muted login-help">Нет приглашения? Обратитесь к владельцу Audiofeel.</p>
+        <p class="muted login-help">Владелец управляет системными настройками, обычный пользователь — только своей фонотекой.</p>
         <a class="recovery-link" href="#/recovery">Аварийное восстановление владельца</a>
       </section>
     </main>
@@ -283,6 +283,7 @@ async function revokeAllPlayerCredentials(button) {
 
 function userAdminCard(user) {
   const isCurrent = user.id === state.currentUser?.id;
+  const roleLocked = isCurrent || user.is_bootstrap_owner || user.state !== "active";
   const stateLabel = {
     pending: "ожидает первого входа",
     active: "активен",
@@ -294,7 +295,7 @@ function userAdminCard(user) {
         <div>
           <span class="source-badge">${user.role === "owner" ? "owner" : "user"}</span>
           <h2>${escapeHtml(user.display_name || user.email || "Пользователь")}</h2>
-          <p class="muted">${escapeHtml(user.email || "Приглашение владельца не настроено")}</p>
+          <p class="muted">${escapeHtml(user.email || "Google-аккаунт владельца не настроен")}</p>
         </div>
         <span class="provider-state ${escapeHtml(user.state)}">${escapeHtml(stateLabel)}</span>
       </div>
@@ -304,6 +305,13 @@ function userAdminCard(user) {
         <div><dt>Последний вход</dt><dd>${escapeHtml(formatDate(user.last_login_at))}</dd></div>
         <div><dt>Активные сессии</dt><dd>${Number(user.active_sessions || 0)}</dd></div>
       </dl>
+      <label class="user-role-control">
+        Роль
+        <select class="user-role-select" data-user-id="${user.id}" data-role-before="${escapeHtml(user.role)}" ${roleLocked ? "disabled" : ""}>
+          <option value="user" ${user.role === "user" ? "selected" : ""}>Пользователь</option>
+          <option value="owner" ${user.role === "owner" ? "selected" : ""}>Владелец</option>
+        </select>
+      </label>
       <div class="action-row">
         <button class="ghost small" type="button" data-action="user-revoke-sessions" data-user-id="${user.id}" ${isCurrent ? "disabled title=\"Текущую сессию завершите кнопкой «Выйти»\"" : ""}>Отозвать сессии</button>
         <button class="danger small" type="button" data-action="user-disable" data-user-id="${user.id}" ${isCurrent || user.state === "disabled" ? "disabled" : ""}>Отключить</button>
@@ -322,25 +330,15 @@ async function renderUsers() {
           <div>
             <p class="eyebrow">OWNER · ДОСТУП</p>
             <h1>Пользователи</h1>
-            <p class="lede">Вход разрешён только заранее приглашённым Google-адресам. После первого входа учётная запись связывается со стабильным Google identity.</p>
+            <p class="lede">Любой подтверждённый Google-аккаунт регистрируется самостоятельно как пользователь. Только владелец может назначать владельцев, отключать аккаунты и отзывать сессии.</p>
           </div>
         </section>
-        <section class="card invite-card">
+        <section class="card access-card">
           <div>
-            <h2>Создать приглашение</h2>
-            <p class="muted">Адрес должен точно совпасть с подтверждённым адресом Google при первом входе.</p>
+            <h2>Матрица доступа</h2>
+            <p><strong>Пользователь:</strong> собственные источники, плейлисты, matching, загрузки, задания и ключи плееров.</p>
+            <p><strong>Владелец:</strong> всё перечисленное выше, а также пользователи, системные провайдеры, библиотечный scan и Google Drive.</p>
           </div>
-          <form id="user-invite-form">
-            <label for="invite-email">Google email</label>
-            <input id="invite-email" name="email" type="email" autocomplete="off" required maxlength="320">
-            <label for="invite-role">Роль</label>
-            <select id="invite-role" name="role">
-              <option value="user">Пользователь</option>
-              <option value="owner">Владелец</option>
-            </select>
-            <button type="submit">Пригласить</button>
-            <p class="form-error" role="alert"></p>
-          </form>
         </section>
         <section class="user-grid">${data.items.map(userAdminCard).join("")}</section>
       </main>
@@ -350,23 +348,20 @@ async function renderUsers() {
   }
 }
 
-async function inviteUser(form) {
-  const button = form.querySelector("button[type=submit]");
-  const error = form.querySelector(".form-error");
-  const values = new FormData(form);
-  button.disabled = true;
-  error.textContent = "";
+async function changeUserRole(select) {
+  const previousRole = select.dataset.roleBefore;
+  select.disabled = true;
   try {
-    await api("/api/admin/users", {
-      method: "POST",
-      body: JSON.stringify({ email: values.get("email"), role: values.get("role") }),
+    await api(`/api/admin/users/${select.dataset.userId}/role`, {
+      method: "PATCH",
+      body: JSON.stringify({ role: select.value }),
     });
-    form.reset();
-    showToast("Приглашение создано");
+    showToast("Роль изменена, прежние сессии пользователя отозваны");
     await renderUsers();
   } catch (exception) {
-    error.textContent = exception.message;
-    button.disabled = false;
+    select.value = previousRole;
+    select.disabled = false;
+    showToast(exception.message);
   }
 }
 
@@ -400,7 +395,7 @@ function renderRecoveryLogin(message = "") {
       <section class="login-panel recovery-panel">
         <p class="eyebrow">OWNER RECOVERY</p>
         <h1>Аварийное восстановление</h1>
-        <p class="lede">Этот отдельный краткоживущий контур нужен только для первоначального приглашения владельца или восстановления доступа.</p>
+        <p class="lede">Этот отдельный краткоживущий контур нужен только для первоначальной привязки bootstrap-владельца или восстановления доступа.</p>
         <form id="recovery-login-form" autocomplete="off">
           <label for="recovery-token">APP_AUTH_TOKEN</label>
           <input id="recovery-token" name="token" type="password" autocomplete="off" required minlength="16" autofocus>
@@ -449,13 +444,13 @@ async function renderRecovery() {
       <main class="login-page">
         <section class="login-panel recovery-panel">
           <p class="eyebrow">OWNER RECOVERY · КРАТКОЖИВУЩАЯ СЕССИЯ</p>
-          <h1>${status.owner_invited ? "Восстановить владельца" : "Пригласить владельца"}</h1>
+          <h1>${status.owner_configured ? "Восстановить владельца" : "Настроить владельца"}</h1>
           <p class="lede">Сохранение нового адреса отвяжет прежний Google identity и немедленно отзовёт все сессии владельца.</p>
           <form id="recovery-owner-form" autocomplete="off">
             <label for="recovery-owner-email">Google email владельца</label>
             <input id="recovery-owner-email" name="email" type="email" autocomplete="off" required maxlength="320">
             <label class="confirm-row"><input name="confirm" type="checkbox" required> Я понимаю, что прежние сессии будут отозваны</label>
-            <button class="danger" type="submit">Сбросить привязку и создать приглашение</button>
+            <button class="danger" type="submit">Сбросить и настроить привязку</button>
             <p class="form-error" role="alert"></p>
           </form>
           <div class="action-row">
@@ -479,14 +474,14 @@ async function updateRecoveryOwner(form) {
   button.disabled = true;
   error.textContent = "";
   try {
-    await api("/api/auth/recovery/owner-invitation", {
+    await api("/api/auth/recovery/owner-binding", {
       method: "POST",
       allowUnauthorized: true,
       csrfToken: state.recoveryCsrfToken,
       body: JSON.stringify({ email, confirm: "RESET BOOTSTRAP OWNER" }),
     });
     state.recoveryCsrfToken = null;
-    showToast("Приглашение владельца сохранено. Войдите через Google.");
+    showToast("Привязка владельца сохранена. Войдите через Google.");
     window.location.hash = "";
     renderLogin();
   } catch (exception) {
@@ -1722,10 +1717,6 @@ app.addEventListener("submit", (event) => {
     event.preventDefault();
     updateRecoveryOwner(event.target);
   }
-  if (event.target.id === "user-invite-form") {
-    event.preventDefault();
-    inviteUser(event.target);
-  }
   if (event.target.id === "player-credential-form") {
     event.preventDefault();
     createPlayerCredential(event.target);
@@ -1753,6 +1744,9 @@ app.addEventListener("submit", (event) => {
 });
 
 app.addEventListener("change", (event) => {
+  if (event.target.matches(".user-role-select")) {
+    changeUserRole(event.target);
+  }
   if (event.target.id === "playlist-converter-file") {
     loadPlaylistFile(event.target).catch((exception) => {
       event.target.closest("form").querySelector(".form-error").textContent = exception.message;

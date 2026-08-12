@@ -1046,36 +1046,9 @@ button.danger {
   background: rgb(134 44 40 / 75%);
 }
 
-.invite-card {
+.access-card {
   min-height: 0;
   margin-bottom: 22px;
-}
-
-.invite-card form {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) auto;
-  gap: 10px;
-  align-items: end;
-  margin-top: 22px;
-}
-
-.invite-card label,
-.invite-card .form-error {
-  grid-row: auto;
-}
-
-.invite-card input,
-.invite-card select {
-  min-height: 48px;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  color: var(--ink);
-  background: #0d1115;
-}
-
-.invite-card .form-error {
-  grid-column: 1 / -1;
 }
 
 .user-grid {
@@ -1108,6 +1081,30 @@ button.danger {
   gap: 16px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--line);
+}
+
+.user-role-control {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr);
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.user-role-select {
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  background: #0d1115;
+}
+
+.user-role-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .user-facts dt {
@@ -1262,9 +1259,6 @@ button.danger {
   .storage-summary,
   .storage-config-card,
   .storage-quota,
-  .invite-card form {
-    grid-template-columns: 1fr;
-  }
 
   .current-user {
     flex-basis: 100%;

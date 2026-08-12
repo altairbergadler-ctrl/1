@@ -25,7 +25,7 @@ class AuthenticationError(RuntimeError):
 
 
 def lock_identity_mutation(db: Session) -> None:
-    """Serialize invitation and identity binding without logging PII conflicts."""
+    """Serialize registration and identity binding without logging PII conflicts."""
 
     if db.get_bind().dialect.name == "postgresql":
         db.execute(

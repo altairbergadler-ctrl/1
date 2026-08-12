@@ -82,3 +82,36 @@ def test_recovery_cookie_is_secure_when_configured(api_client, owner_user, monke
 
     assert response.status_code == 200
     assert "Secure" in response.headers["set-cookie"]
+
+
+def test_recovery_uses_owner_binding_not_general_invitation(api_client, db, owner_user):
+    login = api_client.post(
+        "/api/auth/recovery/login",
+        json={"token": "test-auth-token-12345"},
+        headers={"Origin": "http://testserver"},
+    )
+    csrf = login.json()["csrf_token"]
+
+    status = api_client.get("/api/auth/recovery/status")
+    updated = api_client.post(
+        "/api/auth/recovery/owner-binding",
+        json={
+            "email": "replacement-owner@example.test",
+            "confirm": "RESET BOOTSTRAP OWNER",
+        },
+        headers={
+            "Origin": "http://testserver",
+            "X-CSRF-Token": csrf,
+        },
+    )
+
+    assert status.status_code == 200
+    assert status.json()["owner_configured"] is True
+    assert "owner_invited" not in status.json()
+    assert updated.status_code == 204
+    db.refresh(owner_user)
+    assert owner_user.email == "replacement-owner@example.test"
+    assert owner_user.state.value == "pending"
+    assert owner_user.role.value == "owner"
+    assert owner_user.is_bootstrap_owner is True
+    assert api_client.post("/api/auth/recovery/owner-invitation").status_code == 404

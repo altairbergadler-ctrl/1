@@ -6,6 +6,9 @@ production. Последний Symfonium compatibility code gate пройден 
 `cec30ac`, Alembic находится на `0010_open_subsonic_players`. Real-phone
 acceptance начат: credential создан, provider добавлен и compatibility gate
 развёрнут; catalog sync и playback прошли, изображения нужно повторно загрузить.
+Текущая локальная итерация переводит Google Sign-In на открытую регистрацию с
+ролью `user` по умолчанию и owner-only управлением ролями; она ещё не развёрнута
+и требует отдельного production security gate.
 Предыдущая production-опора до OpenSubsonic migration:
 `04083910c0f1c109fff598d083bfc8a9e6085a27`.
 
@@ -42,8 +45,8 @@ acceptance начат: credential создан, provider добавлен и com
 - Яндекс «Мне нравится» импортируется как стабильный плейлист.
 - Каскад matching: ISRC, exact, fuzzy, manual review, MISSING.
 - Bit-perfect delivery: HTTP Range, одиночный файл, ZIP_STORED, M3U8.
-- Invitation-only Google Sign-In с PKCE/state/nonce/JWKS validation и
-  стабильным `google_sub`; публичной регистрации нет.
+- Google Sign-In с PKCE/state/nonce/JWKS validation, публичной регистрацией
+  подтверждённого identity как `user` и стабильным `google_sub`.
 - Hashed server sessions в HttpOnly/Secure/SameSite cookie, idle/absolute TTL,
   server-side logout/revocation и полноценный CSRF.
 - Обязательный `user_id` у sources/playlists/user jobs, cross-user `404` и
@@ -51,7 +54,7 @@ acceptance начат: credential создан, provider добавлен и com
   locations остаются общими.
 - User-scoped Spotify/Yandex playlist vault и отдельные system Qobuz/Yandex +
   infrastructure Drive vaults.
-- PWA с Google login/logout и owner-разделом invitations/disable/revoke;
+- PWA с Google login/logout и owner-разделом role/disable/revoke;
   session/CSRF tokens не сохраняются в Web Storage.
 - `APP_AUTH_TOKEN` изолирован в `/#/recovery` и не принимается обычным API.
 - Приватный внешний доступ через Tailscale Serve HTTPS. Funnel не включён.
@@ -92,11 +95,11 @@ JavaScript/Python syntax clean, Alembic PostgreSQL current = heads =
 Qobuz sidecar `9 tests`, Alembic `0005`, Celery `pong`, live Yandex health и
 hot rotation без restart.
 
-### 3.1 Google Sign-In / multi-user gate 2026-08-12
+### 3.1 Исторический Google Sign-In / multi-user gate 2026-08-12
 
 - полный Docker pytest с production live-PWA: `293 passed`;
 - live-PWA contract на собранном Nginx image: `9 passed`;
-- отдельные OIDC/JWKS/state/PKCE/invitation/session/CSRF/IDOR тесты: проходят;
+- отдельные OIDC/JWKS/state/PKCE/identity/session/CSRF/IDOR тесты: проходят;
 - JavaScript syntax и PWA static contract: проходят;
 - реальный PostgreSQL migration test: `0007 → 0008 → backfill → 0009`,
   повторный запуск `already_current`, downgrade `0009 → 0007`;
@@ -144,11 +147,38 @@ hot rotation без restart.
 - backend/frontend/PostgreSQL/Redis/sidecars healthy, worker/beat running,
   Celery `pong`, Alembic `0009`, production live-PWA `9 passed`.
 
-Google Sign-In/multi-user gate закрыт полностью. После проверки второй
+Этот gate закрыл прежний invitation-only flow. После проверки второй
 acceptance-user намеренно оставлен в состоянии `disabled`, его sessions
 отозваны; owner остаётся `active`. Acceptance-артефакты добавили один manual
 source, playlist, item и job, но не изменили число `File`, SHA-1 или Drive
 locations.
+
+### 3.2 Открытая регистрация и RBAC — текущий gate
+
+- новый подтверждённый Google identity атомарно создаётся как `active user`;
+- disabled identity не может зарегистрироваться повторно, а email другого
+  стабильного `sub` не может быть захвачен;
+- административное создание invitations удалено;
+- owner может назначать `owner | user`; изменение роли отзывает web sessions;
+- bootstrap owner, текущий owner и последний активный owner защищены от
+  небезопасного понижения;
+- роль `user` получает только собственные sources/playlists/jobs/matching,
+  download grants и player credentials; admin/providers/storage/library scan
+  остаются owner-only с серверным `403`;
+- схема БД и Alembic не меняются: `UserRole(owner|user)` уже существовал.
+
+Локальная проверка текущего diff: auth/registration/RBAC/PWA subset
+`50 passed, 5 skipped`; Python compileall, `node --check` для app/service worker
+и `git diff --check` прошли. Более широкий Windows-прогон дал `297 passed,
+5 skipped`, после чего остановился только на отсутствующем локальном `ffmpeg`
+и запрещённом Windows symlink; полный штатный container suite остаётся
+обязательным перед публикацией/deployment.
+
+До production deployment обязательно: полный backend/PWA suite, новый реальный
+Google account без предварительной DB-записи, проверка default role=`user`,
+owner-only `403`, promotion/demotion с немедленным session revoke, cross-user
+`404`, disabled relogin `403`, Google Login Audience=`External/In production`,
+совпадение local/remote/deployed SHA и отсутствие identity/session данных в логах.
 
 Команда полного локального теста с live-PWA:
 
@@ -296,6 +326,69 @@ best-available acquisition **принят с ограничениями**:
 `docs/music-service-mvp-plan.md`: tracker scraper, qBittorrent automation, scheduled rematching,
 Telegram notifications, dedup/upgrade policy и dashboard.
 
+### 6.5 Персональное радио и умные рекомендации — будущая отдельная итерация
+
+Статус: **отложено**. Эта работа не входит ни в текущий read-only OpenSubsonic
+adapter, ни автоматически в Release 2. Начинать её можно только после отдельного
+согласования research/design-плана.
+
+Текущая клиентская база уже позволяет использовать в Symfonium:
+
+- `Personal Mix` / `Track Mix`, который учитывает локальную историю
+  прослушиваний, оценки и избранное;
+- бесконечный `Smart Queue` в artist-based или random режиме;
+- локальные режимы `Smart Flow`, не требующие Plex Sonic Analysis.
+
+Это не полный аналог «Моей волны» Яндекс.Музыки. Текущий adapter возвращает
+пустые жанры и серверное избранное, не предоставляет граф похожих исполнителей,
+а поэтому `Radio Mix` не получает полноценный источник рекомендаций и может
+откатываться к ограниченному `Instant Mix`. Режимы звукового сходства
+`Transition Maestro`, `Echo Match` и `Steady Vibes` в Symfonium зависят от Plex
+Sonic Analysis; их нельзя обещать для нашего OpenSubsonic provider без отдельной
+клиентской совместимости.
+
+Предлагаемая последовательность будущей итерации:
+
+1. **R0 — client-only baseline.** На реальной пользовательской библиотеке
+   зафиксировать качество `Personal Mix`, `Smart Queue -> Artist-based` и
+   доступных `Smart Flow` без изменений backend. Сохранить обезличенные метрики
+   повторов исполнителя/альбома и ручную оценку пользователя.
+2. **R1 — жанровые metadata.** Спроектировать нормализованное хранение жанров с
+   provenance, заполнение из аудиотегов и разрешённых provider metadata,
+   дедупликацию названий и user-scoped выдачу только для видимых `READY`-треков.
+   Затем заполнить OpenSubsonic genre-поля и методы, реально запрашиваемые
+   Symfonium.
+3. **R2 — похожие исполнители и Radio Mix.** Сначала снять debug-log вызовов
+   актуальной версии Symfonium и подтвердить точный OpenSubsonic/Subsonic API
+   contract. После этого выбрать легальный источник или локальный алгоритм
+   related-artists и ограничить граф исполнителями, для которых у пользователя
+   есть доступные `READY`-треки.
+4. **R3 — персональные сигналы.** Отдельно спроектировать user-scoped историю
+   play/skip, favorite и rating. Любые новые write-endpoint'ы требуют отдельного
+   security review, CSRF/auth boundary и запрета утечки предпочтений между
+   пользователями; текущий playlist adapter при этом остаётся read-only.
+5. **R4 — опциональное звуковое сходство.** Исследовать локальный анализ аудио
+   и embeddings без зависимости от Plex. До подтверждения поддержки со стороны
+   Symfonium результат отдавать только как серверное радио или динамический
+   read-only playlist, а не заявлять совместимость с Plex-only `Smart Flow`.
+
+Минимальная приёмка будущей версии:
+
+- запуск от трека и от исполнителя создаёт релевантную непрерывную очередь, а не
+  простой случайный shuffle;
+- жанровый и related-artist режимы подтверждены по debug-log без скрытого
+  fallback на пустой `Instant Mix`;
+- частые повторы исполнителя/альбома ограничены и измеряются на библиотеке
+  достаточного размера;
+- play/skip/favorite меняют последующий персональный результат только внутри
+  того же аккаунта;
+- чужие треки, история и предпочтения не появляются ни в каталоге, ни в
+  рекомендациях, ни в artwork/stream/download;
+- добавление и удаление `READY`-треков корректно отражается в следующей очереди,
+  импортированном read-only playlist и его automatic offline cache;
+- сбой внешнего metadata-источника не ломает обычный каталог и воспроизведение:
+  остаются безопасные artist-based/random режимы.
+
 ## 7. Ключевая история Git
 
 ### OpenSubsonic iteration — опубликовано и развёрнуто
@@ -356,7 +449,7 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 > `docs/music-service-handoff.md`, `docs/music-service-mvp-plan.md`,
 > `docs/music-service-logic.md`, `docs/google-user-auth.md` и `README.md`;
 > проверь `git status`, локальный/remote/deployed SHA, Alembic и Docker.
-> Google Sign-In использует invitation-only stable `sub`, а Drive OAuth —
+> Google Sign-In использует публичную регистрацию `user` со stable `sub`, а Drive OAuth —
 > отдельный client. Не начинай Release 2 без моего
 > явного указания. Текущий следующий scope бери только из раздела 6
 > handoff-документа и после моего выбора.

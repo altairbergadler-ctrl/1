@@ -42,7 +42,7 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v14";' in service_worker
+    assert 'const CACHE_NAME = "lossless-archive-v15";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
 
@@ -79,7 +79,7 @@ def test_playlist_page_connects_spotify_before_importing_one_url():
     assert ".playlist-import-card" in styles
 
 
-def test_pwa_uses_google_server_session_csrf_and_owner_user_admin():
+def test_pwa_uses_public_google_registration_and_role_admin():
     root = Path(__file__).resolve().parents[2] / "frontend"
     app_script = (root / "app.js").read_text(encoding="utf-8")
     nginx = (root / "nginx.conf").read_text(encoding="utf-8")
@@ -90,7 +90,10 @@ def test_pwa_uses_google_server_session_csrf_and_owner_user_admin():
     assert 'api("/api/auth/logout", { method: "POST" })' in app_script
     assert 'href="#/playlists">Плейлисты</a>' in app_script
     assert 'api("/api/admin/users")' in app_script
-    assert 'id="user-invite-form"' in app_script
+    assert 'class="user-role-select"' in app_script
+    assert 'method: "PATCH"' in app_script
+    assert 'новый аккаунт будет зарегистрирован автоматически' in app_script
+    assert 'id="user-invite-form"' not in app_script
     assert 'data-action="user-disable"' in app_script
     assert 'data-action="user-revoke-sessions"' in app_script
     assert 'id="recovery-login-form"' in app_script

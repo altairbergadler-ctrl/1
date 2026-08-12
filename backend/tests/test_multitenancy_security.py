@@ -162,26 +162,35 @@ def test_owner_endpoints_are_forbidden_to_user_role(api_client, db):
     assert api_client.get("/api/providers/health", headers=headers).status_code == 403
     assert api_client.get("/api/storage", headers=headers).status_code == 403
     assert api_client.get("/api/library/stats", headers=headers).status_code == 403
+    assert (
+        api_client.patch(
+            f"/api/admin/users/{user.id}/role",
+            json={"role": "owner"},
+            headers=headers,
+        ).status_code
+        == 403
+    )
 
 
-def test_owner_can_invite_disable_and_revoke_all_sessions(
+def test_owner_can_change_role_disable_and_revoke_all_sessions(
     api_client, db, owner_user, auth_headers
 ):
-    invited = api_client.post(
-        "/api/admin/users",
-        json={"email": "second-user@example.test", "role": "user"},
+    target = _user(db, "second-user")
+    target_headers = _headers(db, target)
+    promoted = api_client.patch(
+        f"/api/admin/users/{target.id}/role",
+        json={"role": "owner"},
         headers=auth_headers,
     )
 
-    assert invited.status_code == 201
-    body = invited.json()
-    assert body["state"] == "pending"
-    assert "google_sub" not in body
-    assert "token" not in body
+    db.expire_all()
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "owner"
+    assert promoted.json()["is_bootstrap_owner"] is False
+    assert db.get(User, target.id).role == UserRole.owner
+    assert api_client.get("/api/playlists", headers=target_headers).status_code == 401
 
-    target = db.get(User, body["id"])
-    target.state = UserState.active
-    target.activated_at = utcnow()
+    target = db.get(User, target.id)
     target_headers = _headers(db, target)
     revoked = api_client.post(
         f"/api/admin/users/{target.id}/sessions/revoke", headers=auth_headers
@@ -202,11 +211,37 @@ def test_owner_can_invite_disable_and_revoke_all_sessions(
     assert db.get(User, target.id).state == UserState.disabled
     assert api_client.get("/api/playlists", headers=target_headers).status_code == 401
     assert (
+        api_client.patch(
+            f"/api/admin/users/{target.id}/role",
+            json={"role": "user"},
+            headers=auth_headers,
+        ).status_code
+        == 409
+    )
+    assert (
         api_client.post(
             f"/api/admin/users/{owner_user.id}/disable", headers=auth_headers
         ).status_code
         == 409
     )
+    assert (
+        api_client.patch(
+            f"/api/admin/users/{owner_user.id}/role",
+            json={"role": "user"},
+            headers=auth_headers,
+        ).status_code
+        == 409
+    )
+
+
+def test_admin_user_creation_endpoint_is_removed(api_client, auth_headers):
+    response = api_client.post(
+        "/api/admin/users",
+        json={"email": "no-invitation@example.test", "role": "owner"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 405
 
 
 def test_cross_user_ids_are_404_and_shared_file_is_not_duplicated(

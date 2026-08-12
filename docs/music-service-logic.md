@@ -3,7 +3,7 @@
 ## 1. Концепция
 
 Сервис — self-hosted платформа, которая:
-1. Впускает только заранее приглашённых Google-пользователей.
+1. Регистрирует любой подтверждённый Google-аккаунт с базовой ролью `user`.
 2. Парсит торрент-трекеры по тематике «музыкальные альбомы в максимальном качестве» (FLAC 16/44.1, Hi-Res 24/96–24/192, DSD, vinyl rips).
 3. Скачивает раздачи на сетевое хранилище (NAS).
 4. Строит общий дедуплицированный каталог-библиотеку всей музыки.
@@ -60,20 +60,21 @@
 
 ### Identity и access layer
 
-- Google Sign-In — invitation-only OIDC Authorization Code + PKCE, state,
+- Google Sign-In — публичная регистрация через OIDC Authorization Code + PKCE, state,
   nonce, проверка Google JWKS/aud/azp/exp/iat/email_verified.
 - После callback выдаётся собственная hashed server session в HttpOnly cookie;
   Google tokens не сохраняются.
 - Unsafe API требует session-bound CSRF header и exact Origin/Referer.
-- Роль `owner` управляет invitations, system providers, каталогом и Google
-  Drive; роль `user` работает только со своими объектами.
+- Роль `owner` управляет ролями/состояниями пользователей, system providers,
+  каталогом и Google Drive; роль `user` работает только со своими объектами.
 - `APP_AUTH_TOKEN` изолирован в краткоживущем bootstrap/recovery контуре.
 - Google Login и Google Drive используют разные OAuth clients/callbacks.
 
-Production-инварианты подтверждены 2026-08-12 двумя реальными identity:
-неприглашённый login не создаёт user, чужие ID отвечают `404`, две личные READY
-записи могут ссылаться на один физический `File`, а disable немедленно отзывает
-все sessions пользователя. Подробные безопасные доказательства — в
+Подтверждённый Google identity создаёт активного `user`, а последующие входы
+разрешаются по стабильному `sub`. Чужие ID отвечают `404`, две личные READY
+записи могут ссылаться на один физический `File`, а disable или изменение роли
+немедленно отзывает все web sessions пользователя. Исторический production gate
+изоляции 2026-08-12 и новый gate открытой регистрации описаны в
 `docs/music-service-handoff.md`.
 
 ---
