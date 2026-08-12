@@ -203,6 +203,8 @@ def _catalog_response(method: str, request: Request, db: Session, user_id: int) 
         )
     if method == "search3":
         query = request.query_params.get("query", "").casefold().strip()
+        if query == '""':
+            query = ""
         artist_count = _integer(request, "artistCount", 20, maximum=500)
         artist_offset = _integer(request, "artistOffset", 0)
         album_count = _integer(request, "albumCount", 20, maximum=500)

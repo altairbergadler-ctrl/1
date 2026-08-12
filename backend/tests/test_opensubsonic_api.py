@@ -158,12 +158,21 @@ def test_failed_player_authentication_is_rate_limited(
     player_credentials._test_limits.clear()
 
 
-def test_scoped_catalog_empty_search_playlist_order_and_alias(
+def test_scoped_catalog_symfonium_empty_search_playlist_order_and_alias(
     api_client, db, tmp_path, monkeypatch
 ):
     monkeypatch.setattr("app.services.delivery.settings.music_library_path", str(tmp_path))
     _user, key, playlist, artist, album, track, _item, _content = _seed(db, tmp_path)
-    search = api_client.get("/rest/search3.view", params=_params(key, query=""))
+    search = api_client.get(
+        "/rest/search3.view",
+        params=_params(
+            key,
+            query='""',
+            artistCount="500",
+            albumCount="500",
+            songCount="500",
+        ),
+    )
     assert search.status_code == 200
     result = search.json()["subsonic-response"]["searchResult3"]
     assert [row["id"] for row in result["song"]] == [f"so:{track.opensubsonic_id}"]
