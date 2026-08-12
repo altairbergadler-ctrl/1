@@ -2,8 +2,8 @@
 
 Status: implementation and production deployment completed on 2026-08-12.
 Real-phone acceptance is in progress: a real player credential and Symfonium
-provider exist, compatibility gates `5d3b6b2` and `a6b885b` are deployed, and
-initial sync must now be repeated on the phone.
+provider exist, compatibility gates through `041b02a` are deployed, and initial
+sync must now be repeated on the phone.
 
 ## Boundaries
 
@@ -49,6 +49,8 @@ empty and independently paged `search3`, including Symfonium's literal
 `query=""` wildcard, preserves playlist order and duplicates, marks every
 playlist `readonly`, and returns only original bytes with Range and HEAD support.
 Metadata and binary delivery use the same local/Drive source resolver.
+Unknown optional numeric album/song metadata is omitted instead of serialized as
+JSON `null`, matching clients that model present fields as non-null values.
 
 The operator-facing Symfonium setup and initial/add/remove/offline acceptance
 sequence is documented in `player-sync-symfonium.md`. The server-side production

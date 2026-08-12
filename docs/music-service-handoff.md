@@ -3,10 +3,9 @@
 Актуально на: 2026-08-12
 Статус: Google Sign-In/multi-user и read-only OpenSubsonic adapter развёрнуты в
 production. Последний Symfonium compatibility code gate пройден на
-`a6b885b`, Alembic находится на `0010_open_subsonic_players`. Real-phone
+`041b02a`, Alembic находится на `0010_open_subsonic_players`. Real-phone
 acceptance начат: credential создан, provider добавлен и compatibility gate
-развёрнут; initial sync нужно повторить на телефоне после исправления
-`search3 query=""`.
+развёрнут; initial sync нужно повторить после исправления nullable metadata.
 Предыдущая production-опора до OpenSubsonic migration:
 `04083910c0f1c109fff598d083bfc8a9e6085a27`.
 
@@ -327,7 +326,10 @@ Telegram notifications, dedup/upgrade policy и dashboard.
   `getStarred2`/`getBookmarks`/`getGenres`; compatibility gate `5d3b6b2`
   проверен и развёрнут. Следующая sync завершилась с `0` треков из-за буквального
   `search3 query=""`; gate `a6b885b` нормализует этот wildcard и в production
-  возвращает 109 исполнителей, 118 альбомов и 121 песню.
+  возвращает 109 исполнителей, 118 альбомов и 121 песню. Следующая sync дошла до
+  49-го альбома и остановилась на `year: null`; gate `041b02a` опускает все
+  неизвестные необязательные album/song metadata, а production-каталог проверен:
+  109/118/121 объектов и `0` значений `null`.
 
 Перед продолжением прочитать `docs/open-subsonic-integration-plan.md` и
 `docs/player-sync-symfonium.md`. Следующий шаг — ещё раз повторить initial sync в

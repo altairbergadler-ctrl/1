@@ -364,7 +364,9 @@ deployment завершены 2026-08-12. Реальный player credential с�
 `5d3b6b2` и развёрнуто в production. Следующая sync завершилась успешно, но дала
 `0` треков, поскольку Symfonium использует специальный `search3 query=""` для
 полного обхода. Нормализация этого запроса развёрнута в code gate `a6b885b`;
-следующий шаг phone acceptance — ещё одна initial sync.
+следующая попытка дошла до альбомов и выявила несовместимый `year: null`.
+Production gate `041b02a` опускает неизвестные необязательные metadata вместо
+JSON `null`; следующий шаг phone acceptance — ещё одна initial sync.
 
 - `backend/app/api/` — роутеры API, включая matching/download/auth/qobuz
 - `backend/app/opensubsonic/` — API-key auth, scoped catalog, protocol и artwork
