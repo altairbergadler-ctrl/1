@@ -221,7 +221,11 @@ disable/revoke и повторный `403`. Drive account после прове�
 и healthy. В логах не найдено exact/generic email, unredacted OAuth query values
 или session-cookie values.
 
-Перед включением открытой регистрации в production отдельно проверить:
+Открытая регистрация и RBAC развёрнуты в production на
+`8595779f9977611904ede10b909f2a08c2cb904e`. Изолированный VPS suite дал
+`328 passed`; backup прошёл пробное восстановление; deployed/GitHub SHA,
+Alembic `0010`, health контейнеров, Celery `pong` и нулевые error/query-secret
+counters подтверждены. Для ручной identity-приёмки проверить:
 
 1. **Audiofeel Login** имеет Audience=`External` и publishing status production;
    Drive OAuth client и его Test users не изменять.
@@ -233,7 +237,7 @@ disable/revoke и повторный `403`. Drive account после прове�
    owner protections возвращают `409`.
 5. Disabled identity повторно получает `403`; cross-user ID остаются `404`.
 6. В Caddy/backend/frontend logs отсутствуют email, OAuth code/state, ID/access
-   token, session cookie и CSRF values; local, GitHub и deployed SHA совпадают.
+   token, session cookie и CSRF values; GitHub и deployed SHA совпадают.
 
 После появления второго identity schema downgrade больше не применяется:
 rollback выполняется только через остановку writes, предыдущий release SHA и

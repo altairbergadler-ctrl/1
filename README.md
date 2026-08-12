@@ -175,8 +175,9 @@ Google login использует отдельный OAuth/OIDC client и callba
 invitation-only вход, двусторонний cross-user `404`, общий
 дедуплицированный `File`, раздельные Spotify credentials и немедленный
 session revoke при disable на реальных Google identity. После перехода на
-открытую регистрацию требуется повторный production gate: новый Google-аккаунт
-должен автоматически получить `user`, а owner-only API — вернуть ему `403`.
+открытую регистрацию серверный gate развёрнут на `8595779`: новый Google-аккаунт
+автоматически получает `user`, а owner-only API возвращает ему `403`. Реальный
+вход ранее неизвестным Google identity остаётся ручной приёмкой владельца.
 Безопасные доказательства и итоговое состояние записаны в
 [`docs/music-service-handoff.md`](docs/music-service-handoff.md).
 

@@ -1,14 +1,11 @@
 # Music Service MVP: handoff для новых чатов
 
 Актуально на: 2026-08-12
-Статус: Google Sign-In/multi-user и read-only OpenSubsonic adapter развёрнуты в
-production. Последний Symfonium compatibility code gate пройден на
-`cec30ac`, Alembic находится на `0010_open_subsonic_players`. Real-phone
-acceptance начат: credential создан, provider добавлен и compatibility gate
-развёрнут; catalog sync и playback прошли, изображения нужно повторно загрузить.
-Текущая локальная итерация переводит Google Sign-In на открытую регистрацию с
-ролью `user` по умолчанию и owner-only управлением ролями; она ещё не развёрнута
-и требует отдельного production security gate.
+Статус: Google Sign-In/multi-user, read-only OpenSubsonic adapter, открытая
+регистрация и RBAC развёрнуты в production на
+`8595779f9977611904ede10b909f2a08c2cb904e`; Alembic находится на
+`0010_open_subsonic_players`. Real-phone acceptance Symfonium завершён:
+пользователь подтвердил catalog sync, playback и загрузку изображений.
 Предыдущая production-опора до OpenSubsonic migration:
 `04083910c0f1c109fff598d083bfc8a9e6085a27`.
 
@@ -167,18 +164,20 @@ locations.
   остаются owner-only с серверным `403`;
 - схема БД и Alembic не меняются: `UserRole(owner|user)` уже существовал.
 
-Локальная проверка текущего diff: auth/registration/RBAC/PWA subset
-`50 passed, 5 skipped`; Python compileall, `node --check` для app/service worker
-и `git diff --check` прошли. Более широкий Windows-прогон дал `297 passed,
-5 skipped`, после чего остановился только на отсутствующем локальном `ffmpeg`
-и запрещённом Windows symlink; полный штатный container suite остаётся
-обязательным перед публикацией/deployment.
+Production code gate выполнен на VPS из отдельного релизного каталога:
 
-До production deployment обязательно: полный backend/PWA suite, новый реальный
-Google account без предварительной DB-записи, проверка default role=`user`,
-owner-only `403`, promotion/demotion с немедленным session revoke, cross-user
-`404`, disabled relogin `403`, Google Login Audience=`External/In production`,
-совпадение local/remote/deployed SHA и отсутствие identity/session данных в логах.
+- полный backend/PWA suite: `328 passed`;
+- PostgreSQL custom dump прошёл `pg_restore --list` и пробное восстановление;
+- GitHub branch и deployed health совпали на полном SHA `8595779f...904e`;
+- backend/frontend/PostgreSQL/Redis/sidecars healthy, worker/beat running,
+  Celery вернул `pong`, Alembic current=heads=`0010_open_subsonic_players`;
+- live PWA содержит role selector и cache `v15`, invitation form отсутствует;
+- после deployment runtime error hits и query-secret pattern hits равны `0`.
+
+Остаётся ручной identity gate: подтвердить в Google Console для **Audiofeel
+Login** Audience=`External/In production`, затем войти ранее неизвестным реальным
+Google-аккаунтом и проверить default role=`user`, owner-only `403`, смену роли с
+session revoke, cross-user `404` и disabled relogin `403`.
 
 Команда полного локального теста с live-PWA:
 

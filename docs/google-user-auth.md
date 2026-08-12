@@ -324,7 +324,7 @@ library/Drive objects и автоматическое удаление user data
 12. Login и Drive OAuth продолжают работать независимыми clients;
 13. backend/frontend/worker/beat/PostgreSQL/Redis/sidecars healthy, Celery pong;
 14. полный Docker pytest и live-PWA проходят;
-15. local SHA, GitHub branch SHA и deployed release SHA совпадают.
+15. GitHub branch SHA и deployed release SHA совпадают.
 
 Production snapshot 2026-08-12 относится к предыдущему invitation-only flow:
 его isolation, session и IDOR-инварианты проверены с двумя реальными Google
@@ -338,5 +338,9 @@ owner envelope. Disable отозвал живую session немедленно (
 generic leak scans после обоих flows дали 0 для email, credentials, OAuth
 query values и session cookies.
 
-Переход на открытую регистрацию требует нового production gate по пунктам 5,
-6 и 10 выше; до его завершения нельзя считать live-регистрацию подтверждённой.
+Автоматизированный production code gate открытой регистрации выполнен на
+`8595779f9977611904ede10b909f2a08c2cb904e`: isolated VPS suite `328 passed`,
+backup восстановлен в проверочную БД, GitHub/deployed SHA совпали, сервисы
+healthy, Celery вернул `pong`, leak/error counters равны `0`. Ручная часть
+приёмки остаётся за владельцем: Audience=`External/In production` и вход ранее
+неизвестным реальным Google identity по пунктам 5, 6 и 10 выше.
