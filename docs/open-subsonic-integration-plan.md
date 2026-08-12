@@ -1,8 +1,9 @@
 # OpenSubsonic adapter and Symfonium offline sync
 
 Status: implementation and production deployment completed on 2026-08-12.
-Real-phone acceptance and creation of a real player credential require separate
-approval.
+Real-phone acceptance is in progress: a real player credential and Symfonium
+provider exist, compatibility gate `5d3b6b2` is deployed, and initial sync must
+now be repeated on the phone.
 
 ## Boundaries
 
@@ -33,7 +34,8 @@ artist, album and song identities instead of replacing their public IDs.
 ## Protocol profile
 
 The first profile exposes `ping`, `getLicense`, `getOpenSubsonicExtensions`,
-`getMusicFolders`, `getArtists`, `getArtist`, `getAlbum`, `getSong`,
+`getMusicFolders`, empty `getStarred2`, `getBookmarks`, `getGenres`, `getArtists`,
+`getArtist`, `getAlbum`, `getSong`,
 `getAlbumList2`, `search3`, `getPlaylists`, `getPlaylist`, `stream`, `download`
 and `getCoverArt`, with and without `.view`, in XML and JSON where applicable.
 
@@ -49,8 +51,8 @@ HEAD support. Metadata and binary delivery use the same local/Drive source resol
 
 The operator-facing Symfonium setup and initial/add/remove/offline acceptance
 sequence is documented in `player-sync-symfonium.md`. The server-side production
-gate is complete; the real-phone gate remains unexecuted until separately
-approved.
+gate is complete; the real-phone gate is in progress and remains incomplete until
+the initial/add/remove/offline/revoke sequence passes.
 
 ## Operations and rollback
 

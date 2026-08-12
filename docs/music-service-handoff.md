@@ -2,9 +2,10 @@
 
 Актуально на: 2026-08-12
 Статус: Google Sign-In/multi-user и read-only OpenSubsonic adapter развёрнуты в
-production. OpenSubsonic code gate пройден на
-`26f1bd513f22a0ed98afe2628ce440b8c644a371`, Alembic находится на
-`0010_open_subsonic_players`. Real-phone Symfonium acceptance ещё не выполнялась.
+production. Последний Symfonium compatibility code gate пройден на
+`5d3b6b2`, Alembic находится на `0010_open_subsonic_players`. Real-phone
+acceptance начат: credential создан, provider добавлен и compatibility gate
+развёрнут; initial sync нужно повторить на телефоне.
 Предыдущая production-опора до OpenSubsonic migration:
 `04083910c0f1c109fff598d083bfc8a9e6085a27`.
 
@@ -303,7 +304,8 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 - per-device API keys с one-time display, HMAC storage, revoke и user-disable cascade;
 - stable public UUIDs и playlist sync revision на catalog/matching/storage mutations;
 - user-scoped browse/search/playlists/artwork/stream/download, `.view`, XML/JSON,
-  empty `search3`, Range/HEAD и original bytes без transcoding;
+  empty `search3`, `getStarred2`, `getBookmarks`, `getGenres`, Range/HEAD и
+  original bytes без transcoding;
 - Alembic head `0010_open_subsonic_players`, проверенный upgrade → downgrade 0009
   → upgrade на изолированном PostgreSQL;
 - Caddy `/rest/*` direct proxy и отключённый site access log, поскольку API key
@@ -311,7 +313,7 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 - review defects исправлены: discovery JSON соответствует OpenSubsonic, `/rest/`
   исключён из browser cache, metadata/delivery используют единый playable source,
   public IDs переживают retag, revision выполняется один раз на transaction;
-- локальная проверка: полный backend suite `315 passed, 5 skipped`, PostgreSQL
+- последняя проверка: полный backend suite `317 passed, 5 skipped`, PostgreSQL
   migration + idempotent rerun, frontend image/nginx, Compose и Caddy validation прошли;
 - production code gate `26f1bd5`: custom dump прошёл `pg_restore --list` и
   реальное восстановление, migration `0009 → 0010` и idempotent rerun прошли;
@@ -319,13 +321,14 @@ Telegram notifications, dedup/upgrade policy и dashboard.
   counts/digests для 143 `File` и 143 Drive location совпали до и после;
 - live production: backend/frontend healthy, Celery `pong`, публичный HTTPS и
   OpenSubsonic discovery прошли, live-PWA `12 passed`, query-secret log hits `0`;
-- real-phone Symfonium acceptance и создание настоящего player credential не
-  выполнялись и требуют отдельного подтверждения.
+- real-phone Symfonium acceptance начат: настоящий player credential создан,
+  provider добавлен, а первая sync остановилась на отсутствовавших пустых
+  `getStarred2`/`getBookmarks`/`getGenres`; compatibility gate `5d3b6b2`
+  проверен и развёрнут, после чего initial sync нужно повторить.
 
 Перед продолжением прочитать `docs/open-subsonic-integration-plan.md` и
-`docs/player-sync-symfonium.md`. Следующий шаг — отдельная real-phone acceptance:
-покупка/установка Symfonium и создание настоящего player credential требуют
-явного подтверждения.
+`docs/player-sync-symfonium.md`. Следующий шаг — повторить initial sync в уже
+настроенном Symfonium, не создавая новый credential.
 
 - `2ac6e91` — Stage 4: matching, delivery, PWA.
 - `15eedb3` — live PWA manifest media type.

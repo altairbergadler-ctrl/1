@@ -2,9 +2,11 @@
 
 Статус: server-side production gate выполнен 2026-08-12, Alembic находится на
 `0010_open_subsonic_players`, публичный `/rest/*` и отключение access logs
-проверены. На реальном телефоне runbook ещё не выполнялся. Покупка/установка
-приложения и создание реального player credential требуют отдельного
-подтверждения.
+проверены. Phone acceptance начат: Symfonium 14.1.0 установлен, отдельный player
+credential создан и provider добавлен. Первая sync выявила обязательные для
+клиента пустые `getStarred2`, `getBookmarks` и `getGenres`; совместимость
+исправлена в code gate `5d3b6b2`, который развёрнут в production. Initial sync
+и последующие acceptance-шаги теперь нужно повторить на телефоне.
 
 ## До подключения
 
@@ -36,6 +38,14 @@ playlist с телефона в scope этой итерации не входи�
 `Configure auto offline cache`. Названия пунктов могут отличаться между версиями
 Symfonium; итоговая проверка должна подтвердить именно automatic cache, а не
 разовую ручную загрузку или общий rolling cache.
+
+### Совместимость с Symfonium 14.1.0
+
+Перед загрузкой основного каталога клиент запрашивает `getStarred2`,
+`getBookmarks` и `getGenres`. У Music Service нет серверного состояния избранного,
+закладок и жанров, поэтому read-only adapter возвращает корректные пустые
+контейнеры этих коллекций в JSON и XML. Ответ `Method is not implemented` на
+любой из трёх методов прерывает initial sync до запроса песен.
 
 ## Acceptance: initial / add / remove / offline
 
