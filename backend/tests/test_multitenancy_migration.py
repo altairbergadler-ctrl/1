@@ -1,3 +1,5 @@
+"""Lossless expand/backfill/contract migration and rollback tests."""
+
 from __future__ import annotations
 
 import os
@@ -79,6 +81,8 @@ def _create_legacy_schema(engine) -> None:
 
 
 def test_expand_backfill_contract_is_idempotent_and_losslessly_reversible(tmp_path):
+    # Fixed IDs and SHA-1 values prove that ownership backfill changes rights,
+    # not the existing catalog rows or physical-file identity.
     database = (tmp_path / "legacy.sqlite3").resolve()
     database_url = f"sqlite+pysqlite:///{database.as_posix()}"
     engine = create_engine(database_url)

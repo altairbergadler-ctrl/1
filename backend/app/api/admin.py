@@ -25,6 +25,8 @@ def _no_store(response: Response) -> None:
 
 
 def _user_out(db: Session, user: User) -> dict:
+    # Keep identity internals (google_sub and session hashes) out of the admin
+    # response; operators only need lifecycle state and an aggregate count.
     active_sessions = db.scalar(
         select(func.count(UserSession.id)).where(
             UserSession.user_id == user.id,
@@ -102,6 +104,8 @@ def disable_user(
         raise HTTPException(status_code=404, detail="User not found")
     if target.id == owner.id:
         raise HTTPException(status_code=409, detail="The current owner cannot be disabled")
+    # Preserve at least one active owner so a routine admin action cannot remove
+    # the only account capable of recovering or administering the service.
     if target.role == UserRole.owner and target.state == UserState.active:
         other_owners = db.scalar(
             select(func.count(User.id)).where(

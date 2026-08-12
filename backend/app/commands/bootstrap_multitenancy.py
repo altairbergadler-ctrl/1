@@ -109,6 +109,8 @@ def _payload_playlist_id(payload: str | None) -> int | None:
 
 
 def _migrate_user_credential(db, owner: User, provider: str, *, remove_global: bool) -> None:
+    # Migration is idempotent only when an existing user-scoped value decrypts
+    # to the same payload. A conflict is safer to stop than to overwrite.
     global_record = db.scalar(
         select(ProviderCredential).where(ProviderCredential.provider == provider)
     )
@@ -173,6 +175,8 @@ def _migrate_user_credential(db, owner: User, provider: str, *, remove_global: b
 def migrate() -> dict[str, int]:
     db = SessionLocal()
     try:
+        # Serialize the entire backfill on PostgreSQL: concurrent deploys must
+        # not create different owners or move the same credential twice.
         if db.get_bind().dialect.name == "postgresql":
             db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 2026081201})
         owner = _owner(db)
@@ -192,6 +196,8 @@ def migrate() -> dict[str, int]:
                 raise RuntimeError("Legacy source credentials must be migrated first")
 
         sources = list(db.scalars(select(PlaylistSource)))
+        # Existing IDs and relationships stay intact; only the new ownership
+        # foreign keys are populated for the bootstrap owner.
         for source in sources:
             if source.user_id not in (None, owner.id):
                 raise RuntimeError("Playlist source already belongs to another user")

@@ -41,6 +41,8 @@ def migrate() -> dict[str, object]:
     if _current_revision() != EXPAND_REVISION:
         raise RuntimeError("Database did not stop at the ownership expand revision")
 
+    # Keep the three phases explicit: schema expansion, data/credential
+    # backfill, then NOT NULL constraints and removal of legacy columns.
     legacy_count = migrate_credentials.migrate()
     backfill = bootstrap_multitenancy.migrate()
     command.upgrade(config, "head")

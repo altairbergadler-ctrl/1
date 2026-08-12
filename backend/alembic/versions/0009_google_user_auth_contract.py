@@ -47,6 +47,8 @@ def _playlist_id(payload: str | None) -> int | None:
 
 
 def _ensure_backfill() -> int:
+    # The contract phase must never guess ownership. Abort if the explicit
+    # bootstrap/backfill phase left credentials or principals ambiguous.
     bind = op.get_bind()
     legacy_source_credentials = int(
         bind.execute(
@@ -267,6 +269,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    # Once a real second identity has been activated, collapsing the schema to
+    # a single-user model would merge private rights and is therefore refused.
     user_count = int(bind.execute(sa.text("SELECT count(*) FROM users")).scalar_one())
     duplicate_sources = int(
         bind.execute(

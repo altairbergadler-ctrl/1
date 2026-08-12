@@ -1,3 +1,5 @@
+"""Cross-user authorization, session, CSRF, and credential-isolation tests."""
+
 from __future__ import annotations
 
 import json
@@ -343,6 +345,8 @@ def test_cross_user_ids_are_404_and_shared_file_is_not_duplicated(
     assert playlist_b.id not in {item["id"] for item in playlists_a["items"]}
     assert source_b.id not in {item["id"] for item in sources_a["items"]}
 
+    # Every direct foreign identifier is intentionally indistinguishable from
+    # a missing resource while both users may still stream the shared File.
     foreign_gets = [
         f"/api/playlists/{playlist_b.id}",
         f"/api/playlists/{playlist_b.id}/items",

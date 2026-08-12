@@ -25,6 +25,8 @@ def _enum(name: str, *values: str):
 
 
 def upgrade() -> None:
+    # This is deliberately an expand-only step. Ownership columns stay nullable
+    # until the bootstrap command assigns every legacy row to the single owner.
     user_role = _enum("user_role", "owner", "user")
     user_state = _enum("user_state", "pending", "active", "disabled")
     session_kind = _enum("session_kind", "google", "recovery")
@@ -188,6 +190,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    # Restore the encrypted legacy envelope before removing the user-scoped
+    # vault so a pre-multitenancy release can still use the original credential.
     if bind.dialect.name == "postgresql":
         op.execute(
             "INSERT INTO provider_credentials "

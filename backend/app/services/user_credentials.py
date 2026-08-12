@@ -33,6 +33,8 @@ def _provider(value: str | UserProvider) -> str:
 
 
 def _aad(user_id: int, provider: str, version: int) -> bytes:
+    # Bind ciphertext to its owner, provider, and format version. Moving an
+    # otherwise valid envelope to another user's row must fail authentication.
     return (
         f"music-service:user-provider-credential:v1:{user_id}:{provider}:{version}"
     ).encode()
@@ -111,6 +113,8 @@ def save_user_credential(
     plaintext = json.dumps(
         dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode()
+    # Provider tokens remain encrypted at rest and are never copied back onto a
+    # shared PlaylistSource, which would let one OAuth flow replace another.
     ciphertext = AESGCM(key).encrypt(
         nonce,
         plaintext,

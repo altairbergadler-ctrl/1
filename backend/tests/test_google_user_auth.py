@@ -1,3 +1,5 @@
+"""Security contract tests for invitation-only Google OpenID Connect login."""
+
 from __future__ import annotations
 
 import base64
@@ -26,6 +28,9 @@ from app.services.google_login import (
 
 
 CLIENT_ID = "audiofeel-login-test.apps.googleusercontent.com"
+
+# Tests sign local JWTs so claim, nonce, JWKS-rotation, and at_hash failures are
+# deterministic and never require real Google credentials or network traffic.
 
 
 def _b64_integer(value: int) -> str:

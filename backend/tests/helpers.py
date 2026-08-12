@@ -1,3 +1,5 @@
+"""Factories shared by API tests that need an authenticated application user."""
+
 from __future__ import annotations
 
 from sqlalchemy import select

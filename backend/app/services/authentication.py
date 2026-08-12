@@ -54,6 +54,8 @@ def _unb64(value: str) -> bytes:
 
 
 def keyed_digest(purpose: str, value: str) -> bytes:
+    # Domain separation prevents a digest stored for one protocol value from
+    # being accepted as another (for example, session token versus OIDC state).
     return hmac.new(
         _auth_key(),
         purpose.encode() + b"\0" + value.encode(),
@@ -107,6 +109,8 @@ def create_session(
         if kind == SessionKind.recovery
         else settings.auth_cookie_max_age_seconds
     )
+    # Only keyed digests enter the database. The raw bearer value exists long
+    # enough to set the HttpOnly cookie and cannot be recovered from the row.
     record = UserSession(
         id=str(uuid.uuid4()),
         user_id=user.id,
@@ -154,6 +158,8 @@ def session_for_token(
         or (record.user.state != UserState.active and kind == SessionKind.google)
     ):
         return None
+    # Throttle last-seen writes so ordinary API traffic does not turn session
+    # validation into a database write on every request.
     if touch and record.last_seen_at + timedelta(
         seconds=settings.auth_session_touch_interval_seconds
     ) <= now:

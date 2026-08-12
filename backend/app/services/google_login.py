@@ -235,6 +235,8 @@ def begin_google_login(db: Session) -> GoogleAuthorization:
             | GoogleLoginAttempt.consumed_at.is_not(None)
         )
     )
+    # State, browser binding, and nonce are stored as keyed digests. The PKCE
+    # verifier must be recovered at callback time, so it is encrypted instead.
     db.add(
         GoogleLoginAttempt(
             id=attempt_id,
@@ -290,6 +292,8 @@ def _consume_attempt(db: Session, state: str, binding: str) -> GoogleLoginAttemp
         )
     ):
         raise GoogleLoginStateError("Google login state is invalid")
+    # Consume before exchanging the authorization code. A failed downstream
+    # exchange still cannot make the same state/binding pair replayable.
     attempt.consumed_at = now
     db.commit()
     return attempt
@@ -353,6 +357,8 @@ def validate_google_id_token(
         raise GoogleIdentityError("Google identity token is invalid")
     key = _jwks().get(kid)
     if key is None:
+        # Google may rotate signing keys before the cached JWKS expires. Refresh
+        # once for an unknown kid, but never retry signature validation blindly.
         key = _jwks(force=True).get(kid)
     if key is None:
         raise GoogleIdentityError("Google signing key is unknown")
@@ -465,12 +471,17 @@ def complete_google_login(
         expected_nonce_hash=attempt.nonce_hash,
         attempt_created_at=attempt.created_at,
     )
+    # Google tokens are verification inputs only; the application persists
+    # neither token and issues its own opaque server-side session afterward.
     del token_response
     _, email_key = normalize_email(identity.email)
     lock_identity_mutation(db)
     user = db.scalar(
         select(User).where(User.google_sub == identity.sub).with_for_update()
     )
+    # Email is used exactly once to bind a pending invitation. Every later login
+    # resolves the stable Google subject, so an email change cannot create a
+    # second application identity.
     if user is not None:
         if user.state != UserState.active:
             raise GoogleAccountNotInvited("Google account is not allowed")
