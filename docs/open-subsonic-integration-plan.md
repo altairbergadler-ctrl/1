@@ -1,7 +1,8 @@
 # OpenSubsonic adapter and Symfonium offline sync
 
-Status: approved implementation contract. Production migration, deployment and
-real-phone acceptance require separate approval.
+Status: implementation and production deployment completed on 2026-08-12.
+Real-phone acceptance and creation of a real player credential require separate
+approval.
 
 ## Boundaries
 
@@ -47,8 +48,9 @@ marks every playlist `readonly`, and returns only original bytes with Range and
 HEAD support. Metadata and binary delivery use the same local/Drive source resolver.
 
 The operator-facing Symfonium setup and initial/add/remove/offline acceptance
-sequence is documented in `player-sync-symfonium.md`. It remains an unexecuted
-production gate until separately approved.
+sequence is documented in `player-sync-symfonium.md`. The server-side production
+gate is complete; the real-phone gate remains unexecuted until separately
+approved.
 
 ## Operations and rollback
 

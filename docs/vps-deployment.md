@@ -182,7 +182,8 @@ bootstrap owner. После успешного Google-входа recovery ост
 
 ## OpenSubsonic deployment gate
 
-Эта часть ещё не применялась к production. Перед её включением обязательны:
+Gate выполнен 2026-08-12 на code release
+`26f1bd513f22a0ed98afe2628ce440b8c644a371`:
 
 1. PostgreSQL custom dump, `pg_restore --list` и пробное восстановление.
 2. Upgrade до `0010_open_subsonic_players`; проверить, что player key rows не
@@ -192,6 +193,21 @@ bootstrap owner. После успешного Google-входа recovery ост
 4. Backend/PWA regression suite, health всех контейнеров и проверка deployed SHA.
 5. Только затем отдельная real-phone Symfonium acceptance по
    `docs/player-sync-symfonium.md`.
+
+Фактический результат:
+
+- custom dump создан, `pg_restore --list` прошёл, restore в отдельную БД вернул
+  `0009_google_user_auth_contract`, проверочная БД удалена;
+- migration достигла `0010_open_subsonic_players`, повторный запуск вернул
+  `already_current`; автоматически создано `0` player credentials;
+- counts и контрольные digest для 143 `File` и 143 Drive location совпали до и
+  после migration, все public ID/sync metadata заполнены;
+- Caddy `/rest/*`, discarded site log, Uvicorn `--no-access-log` и Nginx
+  `access_log off` применены; backend/frontend healthy, Celery вернул `pong`;
+- public health/deployed SHA, OpenSubsonic discovery и live-PWA `12 passed`;
+  query-secret log hits в Caddy/backend — `0`.
+
+Real-phone Symfonium acceptance в этот gate не входит и остаётся невыполненной.
 
 Rollback приложения выполняется вместе с downgrade до 0009; device keys после
 этого утрачиваются и создаются заново. Multi-user downgrade ниже 0009 остаётся

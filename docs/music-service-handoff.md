@@ -1,12 +1,12 @@
 # Music Service MVP: handoff для новых чатов
 
 Актуально на: 2026-08-12
-Статус: Google Sign-In/multi-user реализованы, развёрнуты и полностью приняты
-в production с двумя реальными Google identity. Кодовый production gate пройден
-на `aca44956ac111424f60cab5f21e11959e6fa57f9`; этот handoff фиксирует результаты
-финальной двухаккаунтной проверки.
-Предыдущая production-опора до этой миграции:
-`22ea6ee592d9e8f314129fadf79ce276ed57f603`.
+Статус: Google Sign-In/multi-user и read-only OpenSubsonic adapter развёрнуты в
+production. OpenSubsonic code gate пройден на
+`26f1bd513f22a0ed98afe2628ce440b8c644a371`, Alembic находится на
+`0010_open_subsonic_players`. Real-phone Symfonium acceptance ещё не выполнялась.
+Предыдущая production-опора до OpenSubsonic migration:
+`04083910c0f1c109fff598d083bfc8a9e6085a27`.
 
 ## 1. Назначение документа
 
@@ -297,7 +297,7 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 
 ## 7. Ключевая история Git
 
-### OpenSubsonic iteration — локально реализовано, не опубликовано
+### OpenSubsonic iteration — опубликовано и развёрнуто
 
 - additive `/rest/*` adapter и PWA-раздел «Плееры»;
 - per-device API keys с one-time display, HMAC storage, revoke и user-disable cascade;
@@ -313,13 +313,19 @@ Telegram notifications, dedup/upgrade policy и dashboard.
   public IDs переживают retag, revision выполняется один раз на transaction;
 - локальная проверка: полный backend suite `315 passed, 5 skipped`, PostgreSQL
   migration + idempotent rerun, frontend image/nginx, Compose и Caddy validation прошли;
-- production остаётся на `0408391`; deployment, миграция production и real-phone
-  Symfonium acceptance не выполнялись.
+- production code gate `26f1bd5`: custom dump прошёл `pg_restore --list` и
+  реальное восстановление, migration `0009 → 0010` и idempotent rerun прошли;
+- после migration автоматически создано `0` player credentials, контрольные
+  counts/digests для 143 `File` и 143 Drive location совпали до и после;
+- live production: backend/frontend healthy, Celery `pong`, публичный HTTPS и
+  OpenSubsonic discovery прошли, live-PWA `12 passed`, query-secret log hits `0`;
+- real-phone Symfonium acceptance и создание настоящего player credential не
+  выполнялись и требуют отдельного подтверждения.
 
 Перед продолжением прочитать `docs/open-subsonic-integration-plan.md` и
-`docs/player-sync-symfonium.md`. Следующий
-разрешённый шаг — review/доработка локальной реализации. Публикация и production
-по-прежнему требуют отдельного подтверждения.
+`docs/player-sync-symfonium.md`. Следующий шаг — отдельная real-phone acceptance:
+покупка/установка Symfonium и создание настоящего player credential требуют
+явного подтверждения.
 
 - `2ac6e91` — Stage 4: matching, delivery, PWA.
 - `15eedb3` — live PWA manifest media type.

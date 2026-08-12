@@ -357,7 +357,9 @@ Sidecar отдельно проверяет allowlist,
 Полный security, migration, rollback и phone-acceptance contract:
 `docs/open-subsonic-integration-plan.md`. Пошаговая настройка и отдельный
 initial/add/remove/offline runbook находятся в `docs/player-sync-symfonium.md`.
-Production migration и реальная Symfonium-приёмка выполняются только отдельным
+Production migration до `0010_open_subsonic_players` и публичный `/rest/*`
+deployment завершены 2026-08-12. Создание реального player credential,
+покупка/установка Symfonium и phone acceptance остаются отдельным подтверждаемым
 операционным шагом.
 
 - `backend/app/api/` — роутеры API, включая matching/download/auth/qobuz
