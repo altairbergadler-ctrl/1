@@ -38,7 +38,6 @@ from app.services.user_credentials import (
 SPOTIFY_SCOPES = (
     "playlist-read-private",
     "playlist-read-collaborative",
-    "user-library-read",
 )
 SPOTIFY_PLAYLIST_ITEMS_PAGE_SIZE = 50
 _ISRC_RE = re.compile(r"^[A-Z0-9]{12}$")
@@ -67,6 +66,10 @@ class SpotifyTokenError(SpotifyServiceError):
 
 class SpotifyProviderError(SpotifyServiceError):
     """Spotify could not complete a remote OAuth operation."""
+
+
+class SpotifyAccessDeniedError(SpotifyServiceError):
+    """Spotify authenticated the user but denied playlist API access."""
 
 
 class SpotifyImportError(SpotifyServiceError):
@@ -161,6 +164,7 @@ class SpotifyImportSummary:
     tracks_imported: int = 0
     skipped_items: int = 0
     failed: int = 0
+    restricted: int = 0
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -457,6 +461,39 @@ def canonical_spotify_playlist_url(url: str) -> str:
     return f"https://open.spotify.com/playlist/{spotify_playlist_id_from_url(url)}"
 
 
+def _spotify_client(access_token: str) -> SpotifyApiClient:
+    return spotipy.Spotify(
+        auth=access_token,
+        requests_timeout=15,
+        retries=3,
+        status_retries=3,
+        backoff_factor=0.5,
+    )
+
+
+def _spotify_http_status(exc: Exception) -> int | None:
+    try:
+        return int(getattr(exc, "http_status", 0) or 0) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_spotify_access(token: SpotifyToken) -> None:
+    """Verify the exact playlist capability before replacing a saved token."""
+
+    try:
+        page = _spotify_client(token.access_token).current_user_playlists(
+            limit=1,
+            offset=0,
+        )
+    except Exception as exc:
+        if _spotify_http_status(exc) == 403:
+            raise SpotifyAccessDeniedError("Spotify playlist access is denied") from exc
+        raise SpotifyProviderError("Spotify playlist access check failed") from exc
+    if not isinstance(page, Mapping) or not isinstance(page.get("items"), list):
+        raise SpotifyProviderError("Spotify playlist access check returned invalid data")
+
+
 def _spotify_client_for_source(
     db: Session,
     source: PlaylistSource,
@@ -480,13 +517,7 @@ def _spotify_client_for_source(
     access_token = str(credential.get("access_token") or "").strip()
     if not access_token:
         raise SpotifyTokenError("Spotify source has no access token")
-    return spotipy.Spotify(
-        auth=access_token,
-        requests_timeout=15,
-        retries=3,
-        status_retries=3,
-        backoff_factor=0.5,
-    )
+    return _spotify_client(access_token)
 
 
 def _page_items(page: Mapping[str, Any], *, operation: str) -> list[Any]:
@@ -725,10 +756,16 @@ def import_spotify_playlists(
                 db.rollback()
                 if isinstance(exc, SQLAlchemyError):
                     raise
+                if _spotify_http_status(exc) == 403:
+                    summary.restricted += 1
+                    summary.failed += 1
+                    continue
                 summary.failed += 1
                 summary.errors.append(f"{remote.external_id}: {type(exc).__name__}")
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if _spotify_http_status(exc) == 403:
+            raise SpotifyAccessDeniedError("Spotify playlist access is denied") from exc
         raise
     return summary
 
@@ -753,6 +790,10 @@ def import_spotify_playlist_url(
             fields="id,name,snapshot_id,type",
         )
     except Exception as exc:
+        if _spotify_http_status(exc) == 403:
+            raise SpotifyAccessDeniedError(
+                "Spotify allows importing only owned or collaborative playlists"
+            ) from exc
         raise SpotifyProviderError(
             "Spotify could not read this public playlist"
         ) from exc
@@ -783,6 +824,10 @@ def import_spotify_playlist_url(
         db.refresh(playlist)
     except Exception as exc:
         db.rollback()
+        if _spotify_http_status(exc) == 403:
+            raise SpotifyAccessDeniedError(
+                "Spotify allows importing only owned or collaborative playlists"
+            ) from exc
         if isinstance(exc, (SQLAlchemyError, SpotifyServiceError)):
             raise
         raise SpotifyProviderError(

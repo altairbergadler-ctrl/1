@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from app.models import Playlist, PlaylistItem, PlaylistSource, ServiceEnum, utcnow
 from app.services.spotify import (
     RedisOAuthStateStore,
+    SpotifyAccessDeniedError,
     SpotifyConfigurationError,
     SpotifyOAuthStateError,
     SpotifyProviderError,
@@ -25,6 +26,7 @@ from app.services.spotify import (
     refresh_spotify_token,
     save_spotify_token,
     spotify_playlist_id_from_url,
+    validate_spotify_access,
 )
 from app.services.user_credentials import (
     get_user_credential_payload,
@@ -325,6 +327,42 @@ def test_create_oauth_requires_all_credentials():
         create_spotify_oauth(config)
 
 
+def test_oauth_requests_only_playlist_read_scopes():
+    config = SimpleNamespace(
+        spotify_client_id="client",
+        spotify_client_secret="secret",
+        spotify_redirect_uri="https://service.test/callback",
+    )
+
+    oauth = create_spotify_oauth(config)
+
+    assert set(oauth.scope.split()) == {
+        "playlist-read-private",
+        "playlist-read-collaborative",
+    }
+
+
+def test_access_validation_maps_development_mode_403(monkeypatch):
+    class ForbiddenSpotify:
+        def current_user_playlists(self, *, limit, offset):
+            error = RuntimeError("provider detail")
+            error.http_status = 403
+            raise error
+
+    monkeypatch.setattr(
+        "app.services.spotify._spotify_client",
+        lambda _access_token: ForbiddenSpotify(),
+    )
+    token = SpotifyToken(
+        access_token="access",
+        refresh_token="refresh",
+        expires_at=None,
+    )
+
+    with pytest.raises(SpotifyAccessDeniedError, match="playlist access is denied"):
+        validate_spotify_access(token)
+
+
 def test_spotipy_uses_current_playlist_items_endpoint():
     major, minor, *_ = (int(part) for part in version("spotipy").split("."))
 
@@ -405,6 +443,7 @@ def test_import_paginates_maps_tracks_and_is_idempotent_by_snapshot(db):
         "tracks_imported": 3,
         "skipped_items": 2,
         "failed": 0,
+        "restricted": 0,
         "errors": [],
     }
     assert spotify.playlist_calls == [(50, 0), (50, 1)]
@@ -549,6 +588,43 @@ def test_import_isolates_a_bad_playlist_and_keeps_successful_imports(db):
     assert summary.errors == ["p2: SpotifyImportError"]
     assert db.scalar(select(func.count()).select_from(Playlist)) == 1
     assert db.scalar(select(func.count()).select_from(PlaylistItem)) == 2
+
+
+def test_import_counts_development_mode_restrictions_without_leaking_ids(db):
+    class RestrictedSpotify(FakeSpotify):
+        def playlist_items(
+            self,
+            playlist_id,
+            *,
+            limit,
+            offset,
+            additional_types,
+        ):
+            if playlist_id == "p2":
+                error = RuntimeError("provider detail")
+                error.http_status = 403
+                raise error
+            return super().playlist_items(
+                playlist_id,
+                limit=limit,
+                offset=offset,
+                additional_types=additional_types,
+            )
+
+    source = _source(db)
+    summary = import_spotify_playlists(
+        db,
+        source,
+        RestrictedSpotify(),
+        normalizer=_simple_normalize,
+    )
+
+    assert summary.discovered == 2
+    assert summary.created == 1
+    assert summary.failed == 1
+    assert summary.restricted == 1
+    assert summary.errors == []
+    assert db.scalar(select(func.count()).select_from(Playlist)) == 1
 
 
 def test_import_propagates_database_errors_for_celery_retry(db, monkeypatch):

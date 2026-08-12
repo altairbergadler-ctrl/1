@@ -10,6 +10,7 @@ from app.models import PlaylistSource, ServiceEnum, User
 from app.schemas import GoogleOAuthStartOut, SourceListOut, SourceOut, YandexCredentialIn
 from app.services.user_credentials import has_user_credential, save_user_credential
 from app.services.spotify import (
+    SpotifyAccessDeniedError,
     SpotifyConfigurationError,
     SpotifyOAuthStateError,
     SpotifyOAuthStateStorageError,
@@ -19,11 +20,19 @@ from app.services.spotify import (
     create_spotify_state_store,
     exchange_spotify_code,
     save_spotify_token,
+    validate_spotify_access,
     validate_spotify_state,
 )
 from app.services.yandex import YandexConfigurationError, create_yandex_client
 
 router = APIRouter()
+
+
+def _spotify_pwa_redirect(result: str) -> RedirectResponse:
+    return RedirectResponse(
+        url=f"/?spotify_{result}=1#/playlists",
+        status_code=status.HTTP_302_FOUND,
+    )
 
 
 def _source_out(db: Session, source: PlaylistSource) -> dict:
@@ -112,16 +121,14 @@ def spotify_callback(
                 state_value,
                 expected_context=context,
             )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Spotify authorization was declined",
-            )
+            return _spotify_pwa_redirect("access_denied")
         token = exchange_spotify_code(
             code or "",
             state_value,
             state_store,
             expected_context=context,
         )
+        validate_spotify_access(token)
         source = db.scalar(
             select(PlaylistSource).where(
                 PlaylistSource.user_id == current_user.id,
@@ -136,34 +143,19 @@ def spotify_callback(
             db.add(source)
             db.flush()
         save_spotify_token(db, token, source=source)
-    except HTTPException:
-        raise
-    except SpotifyOAuthStateStorageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Spotify OAuth state storage is unavailable",
-        ) from exc
-    except SpotifyOAuthStateError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Spotify OAuth state is invalid or expired",
-        ) from exc
-    except SpotifyTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Spotify token exchange failed",
-        ) from exc
-    except SpotifyProviderError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Spotify token exchange is unavailable",
-        ) from exc
-    except SpotifyConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Spotify OAuth is not configured",
-        ) from exc
-    return RedirectResponse(url="/#/playlists", status_code=status.HTTP_302_FOUND)
+    except SpotifyOAuthStateStorageError:
+        return _spotify_pwa_redirect("state_unavailable")
+    except SpotifyAccessDeniedError:
+        return _spotify_pwa_redirect("not_allowed")
+    except SpotifyOAuthStateError:
+        return _spotify_pwa_redirect("invalid_state")
+    except SpotifyTokenError:
+        return _spotify_pwa_redirect("token_exchange")
+    except SpotifyProviderError:
+        return _spotify_pwa_redirect("unavailable")
+    except SpotifyConfigurationError:
+        return _spotify_pwa_redirect("not_configured")
+    return _spotify_pwa_redirect("connected")
 
 
 @router.post(

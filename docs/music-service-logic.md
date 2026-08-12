@@ -184,9 +184,11 @@ source/playlist. `File.sha1` остаётся глобально уникаль�
 ## 6. Модуль 4: Playlist Importer (Spotify / Яндекс.Музыка / файлы)
 
 ### 6.1 Spotify
-- OAuth 2.0 (Authorization Code Flow), scopes: `playlist-read-private`, `playlist-read-collaborative`, `user-library-read`.
-- API: `GET /v1/me/playlists`, `GET /v1/playlists/{id}/tracks` (пагинация), поля: track name, artists, album, **ISRC** (критично для матчинга), duration_ms.
-- Webhook/polling по расписанию (например, каждые 6 часов) + инкремент через `snapshot_id`.
+- OAuth 2.0 Authorization Code Flow; минимальные scopes: `playlist-read-private` и `playlist-read-collaborative`.
+- Callback сначала проверяет `GET /v1/me/playlists`; только после успешной capability-check новый user-scoped token заменяет прежний.
+- API: `GET /v1/me/playlists`, `GET /v1/playlists/{id}/items` (пагинация), поля: track name, artists, album, **ISRC** (критично для матчинга), duration_ms.
+- В Development Mode разрешены только allowlisted users, а items импортируются только для owned/collaborative playlists; `403` учитывается как `restricted` без остановки остальных плейлистов.
+- Full import сразу запускает matching при создании или обновлении данных; `snapshot_id` сохраняет инкрементальность.
 
 ### 6.2 Яндекс.Музыка
 - Токен пользователя (OAuth Яндекс ID) или cookie-токен.

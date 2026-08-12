@@ -427,9 +427,28 @@ Sonic Analysis; их нельзя обещать для нашего OpenSubsoni
   local path. Gate `cec30ac` читает embedded artwork из bounded 5 МиБ Drive Range,
   живой production test вернул JPEG для 3 из 3 альбомов и создал bounded cache.
 
-Перед продолжением прочитать `docs/open-subsonic-integration-plan.md` и
-`docs/player-sync-symfonium.md`. Следующий шаг — повторить sync изображений в
-уже настроенном Symfonium, не создавая новый credential, затем перейти к offline.
+### 7.2 Spotify OAuth/import gate 2026-08-12
+
+- OAuth scopes сокращены до `playlist-read-private` и
+  `playlist-read-collaborative`; `user-library-read` не запрашивается;
+- callback проверяет доступ к `current_user_playlists` до сохранения token,
+  возвращает результат в PWA и не заменяет прежний credential при `403`;
+- PWA после подключения умеет импортировать все доступные плейлисты аккаунта,
+  показывает отдельный счётчик `restricted` и сохраняет импорт по одной ссылке;
+- full import автоматически запускает matching для созданных или обновлённых
+  playlists; чистый access restriction не отправляется на бессмысленные retry;
+- provider `403` не включает внешний playlist ID в user-facing diagnostics;
+- README, логика и руководство импорта синхронизированы с Development Mode и
+  Spotify Web API 2026: до пяти allowlisted users, items только для
+  owned/collaborative playlists;
+- изолированная VPS-приёмка: targeted `45 passed, 5 skipped`, полный suite с
+  live Nginx/PWA `333 passed`; JavaScript/Python syntax и `git diff --check`
+  прошли. Схема БД и Alembic не менялись.
+
+Следующая ручная приёмка после deploy: добавить тестовый Spotify-аккаунт в
+Dashboard → Users Management, переподключить его в PWA и нажать
+«Импортировать мои плейлисты». После проверки `restricted` можно вернуться к
+offline-сценарию из `docs/player-sync-symfonium.md` без перевыпуска player key.
 
 - `2ac6e91` — Stage 4: matching, delivery, PWA.
 - `15eedb3` — live PWA manifest media type.

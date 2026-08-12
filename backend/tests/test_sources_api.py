@@ -6,11 +6,13 @@ from sqlalchemy import func, select
 from app.models import PlaylistSource, ServiceEnum, utcnow
 from app.services.user_credentials import get_user_credential_payload
 from app.services.spotify import (
+    SpotifyAccessDeniedError,
     SpotifyAuthorizationRequest,
     SpotifyOAuthStateError,
     SpotifyOAuthStateStorageError,
     SpotifyProviderError,
     SpotifyToken,
+    save_spotify_token,
 )
 from app.services.yandex import YandexConfigurationError
 
@@ -65,6 +67,9 @@ def test_spotify_callback_upserts_one_source_without_exposing_tokens(
         "app.api.sources.exchange_spotify_code",
         lambda *_args, **_kwargs: next(tokens),
     )
+    monkeypatch.setattr(
+        "app.api.sources.validate_spotify_access", lambda _token: None
+    )
 
     first = api_client.get(
         "/api/sources/spotify/callback",
@@ -81,8 +86,8 @@ def test_spotify_callback_upserts_one_source_without_exposing_tokens(
 
     assert first.status_code == 302
     assert second.status_code == 302
-    assert first.headers["location"] == "/#/playlists"
-    assert second.headers["location"] == "/#/playlists"
+    assert first.headers["location"] == "/?spotify_connected=1#/playlists"
+    assert second.headers["location"] == "/?spotify_connected=1#/playlists"
     assert (
         db.scalar(
             select(func.count(PlaylistSource.id)).where(
@@ -116,21 +121,22 @@ def test_spotify_callback_rejects_invalid_state(api_client, auth_headers, monkey
         "/api/sources/spotify/callback",
         params={"code": "code", "state": "invalid-state"},
         headers=auth_headers,
+        follow_redirects=False,
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Spotify OAuth state is invalid or expired"
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?spotify_invalid_state=1#/playlists"
 
 
 @pytest.mark.parametrize(
-    ("exception", "expected_status"),
+    ("exception", "notice"),
     [
-        (SpotifyOAuthStateStorageError("redis unavailable"), 503),
-        (SpotifyProviderError("spotify unavailable"), 502),
+        (SpotifyOAuthStateStorageError("redis unavailable"), "state_unavailable"),
+        (SpotifyProviderError("spotify unavailable"), "unavailable"),
     ],
 )
 def test_spotify_callback_maps_provider_outages_safely(
-    api_client, auth_headers, monkeypatch, exception, expected_status
+    api_client, auth_headers, monkeypatch, exception, notice
 ):
     monkeypatch.setattr(
         "app.api.sources.create_spotify_state_store", lambda **_kwargs: object()
@@ -144,10 +150,64 @@ def test_spotify_callback_maps_provider_outages_safely(
         "/api/sources/spotify/callback",
         params={"code": "code", "state": "state"},
         headers=auth_headers,
+        follow_redirects=False,
     )
 
-    assert response.status_code == expected_status
-    assert "unavailable" in response.json()["detail"]
+    assert response.status_code == 302
+    assert response.headers["location"] == f"/?spotify_{notice}=1#/playlists"
+
+
+def test_spotify_callback_keeps_previous_credential_when_access_is_denied(
+    api_client, auth_headers, owner_user, db, monkeypatch
+):
+    source = PlaylistSource(
+        user_id=owner_user.id,
+        service=ServiceEnum.spotify,
+    )
+    db.add(source)
+    db.commit()
+    save_spotify_token(
+        db,
+        SpotifyToken(
+            access_token="previous-access",
+            refresh_token="previous-refresh",
+            expires_at=utcnow() + timedelta(hours=2),
+        ),
+        source=source,
+    )
+    monkeypatch.setattr(
+        "app.api.sources.create_spotify_state_store", lambda **_kwargs: object()
+    )
+    token = SpotifyToken(
+        access_token="rejected-access",
+        refresh_token="rejected-refresh",
+        expires_at=utcnow() + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "app.api.sources.exchange_spotify_code",
+        lambda *_args, **_kwargs: token,
+    )
+    monkeypatch.setattr(
+        "app.api.sources.validate_spotify_access",
+        lambda _token: (_ for _ in ()).throw(
+            SpotifyAccessDeniedError("not allowlisted")
+        ),
+    )
+
+    response = api_client.get(
+        "/api/sources/spotify/callback",
+        params={"code": "code", "state": "state"},
+        headers=auth_headers,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?spotify_not_allowed=1#/playlists"
+    assert db.scalar(select(func.count(PlaylistSource.id))) == 1
+    assert get_user_credential_payload(db, owner_user.id, "spotify") == {
+        "access_token": "previous-access",
+        "refresh_token": "previous-refresh",
+    }
 
 
 def test_yandex_connect_and_source_list_hide_token(

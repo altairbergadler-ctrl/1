@@ -96,19 +96,33 @@ ISRC, duration и Spotify track ID сохраняются, когда они к�
 ## Spotify OAuth
 
 OAuth остаётся удобным необязательным путём. Пользователь нажимает `Войти через
-Spotify`, вводит пароль только на стороне Spotify и возвращается на
-`/#/playlists`. Client ID и Client Secret находятся только на сервере.
-Начало OAuth выполняется state-changing `POST` с CSRF; Redis state одноразовый
-и привязан к текущим `user_id` и server session ID.
+Spotify`, вводит пароль только на стороне Spotify и возвращается на страницу
+плейлистов с результатом подключения. Client ID и Client Secret находятся
+только на сервере. Начало OAuth выполняется state-changing `POST` с CSRF;
+Redis state одноразовый и привязан к текущим `user_id` и server session ID.
+Callback проверяет реальный доступ к playlist API до замены encrypted token,
+поэтому неразрешённый аккаунт не ломает уже рабочее подключение.
 
-После подключения `POST /api/playlists/import-url` принимает строгую ссылку
-`https://open.spotify.com/playlist/{id}`. Backend извлекает только ID, читает
-плейлист пользовательским access token и сразу запускает matching. Произвольные
-URL не запрашиваются.
+После подключения доступны два сценария:
 
-Ограничения Spotify Development Mode сохраняются: allowlist и доступность
-содержимого определяет Spotify. Конвертер предназначен как независимый путь,
-а не как технический обход этих ограничений.
+1. `POST /api/playlists/import` импортирует все доступные плейлисты аккаунта и
+   автоматически запускает matching для созданных или обновлённых данных;
+2. `POST /api/playlists/import-url` принимает строгую ссылку
+   `https://open.spotify.com/playlist/{id}`, извлекает только ID и импортирует
+   один принадлежащий пользователю или collaborative-плейлист.
+
+Произвольные URL не запрашиваются. Ограничения Spotify Development Mode
+сохраняются: не более пяти allowlisted пользователей, каждый аккаунт должен
+быть добавлен владельцем приложения в Dashboard → Users Management. После
+изменений Web API 2026 года items доступны только для owned/collaborative
+плейлистов. Такие ограничения считаются отдельно как `restricted`, не попадают
+в диагностические сообщения с внешними ID и не останавливают успешную часть
+импорта. Конвертер остаётся независимым путём, а не техническим обходом
+ограничений Spotify.
+
+Официальные границы режима и OAuth: [Quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes),
+[Authorization Code Flow](https://developer.spotify.com/documentation/web-api/tutorials/code-flow),
+[February 2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide).
 
 ## Безопасность и границы
 

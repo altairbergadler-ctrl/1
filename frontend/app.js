@@ -1044,26 +1044,35 @@ async function importPlaylistContent(form) {
 }
 
 
-function playlistUrlImportCard(spotifyConnected) {
+function playlistUrlImportCard(spotifySource) {
+  const spotifyConnected = Boolean(spotifySource?.connected);
   return `
     <section class="card playlist-import-card">
       <div>
-        <p class="eyebrow">НОВЫЙ ПЛЕЙЛИСТ</p>
-        <h2>${spotifyConnected ? "Вставьте ссылку Spotify" : "Подключите Spotify"}</h2>
+        <p class="eyebrow">SPOTIFY · ЛИЧНЫЕ ПЛЕЙЛИСТЫ</p>
+        <h2>${spotifyConnected ? "Spotify подключён" : "Подключите Spotify"}</h2>
         <p class="lede">${spotifyConnected
-          ? "Сервис прочитает выбранный плейлист через подключённый аккаунт, сохранит порядок треков и сразу запустит сопоставление с архивом."
+          ? "Импортируйте все доступные плейлисты своего аккаунта одним нажатием. Audiofeel сохранит порядок и автоматически сопоставит треки с архивом."
           : "Один раз войдите через обычное окно Spotify. Client ID, Client Secret и пароль вводить в Audiofeel не нужно. После подтверждения вы вернётесь к плейлистам."}</p>
       </div>
       ${spotifyConnected ? `
+        <div class="action-row">
+          <button type="button" data-action="spotify-import-all" data-source-id="${spotifySource.id}">Импортировать мои плейлисты</button>
+          <button class="secondary" type="button" data-action="spotify-connect">Переподключить Spotify</button>
+        </div>
+        <p class="muted">Spotify Development Mode отдаёт содержимое только плейлистов, которыми вы владеете или где вы соавтор. Остальные будут пропущены без остановки импорта.</p>
         <form id="playlist-url-form">
-          <label for="playlist-url">Ссылка на плейлист</label>
+          <label for="playlist-url">Или ссылка на ваш плейлист</label>
           <div class="playlist-url-row">
             <input id="playlist-url" name="url" type="url" inputmode="url" autocomplete="url" placeholder="https://open.spotify.com/playlist/..." required maxlength="2048">
             <button type="submit">Добавить</button>
           </div>
           <p class="form-error" role="alert"></p>
         </form>
-      ` : '<button type="button" data-action="spotify-connect">Войти через Spotify</button>'}
+      ` : `
+        <button type="button" data-action="spotify-connect">Войти через Spotify</button>
+        <p class="muted">Если приложение Spotify работает в Development Mode, владелец сервиса должен заранее добавить ваш Spotify-аккаунт в Users Management.</p>
+      `}
     </section>
   `;
 }
@@ -1108,6 +1117,47 @@ async function connectSpotify(button) {
 }
 
 
+async function importSpotifyLibrary(button) {
+  button.disabled = true;
+  try {
+    const job = await api("/api/playlists/import", {
+      method: "POST",
+      body: JSON.stringify({ source_id: Number(button.dataset.sourceId) }),
+    });
+    showToast("Spotify импортирует доступные плейлисты…", 10_000);
+    const finished = await waitForJob(job.id, "Импорт Spotify завершился ошибкой");
+    const summary = finished.payload?.import || {};
+    showToast(
+      `Spotify: создано ${summary.created || 0}, обновлено ${summary.updated || 0}, без изменений ${summary.unchanged || 0}, ограничено Spotify ${summary.restricted || 0}, ошибок ${Math.max(0, (summary.failed || 0) - (summary.restricted || 0))}`,
+      12_000,
+    );
+    await renderPlaylists();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+
+function consumeSpotifyCallbackNotice() {
+  const query = new URLSearchParams(window.location.search);
+  const labels = {
+    spotify_connected: "Spotify подключён — теперь можно импортировать свои плейлисты",
+    spotify_access_denied: "Подключение Spotify отменено",
+    spotify_not_allowed: "Spotify не разрешил доступ. В Development Mode аккаунт нужно добавить в Users Management",
+    spotify_invalid_state: "Сессия подключения Spotify истекла — попробуйте ещё раз",
+    spotify_token_exchange: "Spotify не выдал токен — попробуйте переподключиться",
+    spotify_unavailable: "Spotify временно недоступен",
+    spotify_state_unavailable: "Сервис подключения временно недоступен",
+    spotify_not_configured: "Spotify OAuth не настроен владельцем сервиса",
+  };
+  const key = Object.keys(labels).find((name) => query.has(name));
+  if (!key) return;
+  showToast(labels[key], 10_000);
+  window.history.replaceState(null, "", `${window.location.pathname}#/playlists`);
+}
+
+
 async function renderPlaylists() {
   loadingPage("Плейлисты в вашем архиве");
   try {
@@ -1119,8 +1169,8 @@ async function renderPlaylists() {
       api("/api/qobuz/status").catch(() => null),
       api("/api/yandex-download/status").catch(() => null),
     ]);
-    const spotifyConnected = sources.items.some(
-      (source) => source.service === "spotify" && source.connected,
+    const spotifySource = sources.items.find(
+      (source) => source.service === "spotify",
     );
     app.innerHTML = shell(`
       <main>
@@ -1136,17 +1186,18 @@ async function renderPlaylists() {
           </div>
         </section>
         ${playlistConverterCard()}
-        ${playlistUrlImportCard(spotifyConnected)}
+        ${playlistUrlImportCard(spotifySource)}
         ${qobuzSourceCard(qobuzStatus)}
         ${yandexStatus?.enabled ? yandexSourceCard(yandexStatus) : ""}
         ${data.items.length ? `<section class="playlist-grid">${data.items.map(playlistCard).join("")}</section>` : `
           <section class="empty-state">
             <h2>Плейлистов пока нет</h2>
-            <p>${spotifyConnected ? "Вставьте выше ссылку Spotify — здесь появится импортированный плейлист и прогресс сопоставления." : "Подключите Spotify, затем добавьте нужный плейлист по ссылке."}</p>
+            <p>${spotifySource?.connected ? "Импортируйте выше свои плейлисты Spotify — здесь появится прогресс сопоставления." : "Подключите Spotify, затем импортируйте свои плейлисты."}</p>
           </section>
         `}
       </main>
     `);
+    consumeSpotifyCallbackNotice();
   } catch (exception) {
     if (state.authenticated) showToast(exception.message);
   }
@@ -1767,6 +1818,7 @@ app.addEventListener("click", (event) => {
   if (action === "yandex-fetch") yandexFetchMissing(button);
   if (action === "provider-health") runProviderHealth(button);
   if (action === "spotify-connect") connectSpotify(button);
+  if (action === "spotify-import-all") importSpotifyLibrary(button);
   if (action === "storage-connect") connectGoogle(button);
   if (action === "storage-health") runStorageHealth(button);
   if (action === "storage-migrate") migrateLocalStorage(button);

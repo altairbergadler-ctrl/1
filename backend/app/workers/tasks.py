@@ -30,6 +30,7 @@ from app.services.qobuz import (
 )
 from app.services.scanner import ScanAlreadyRunning, scan_library
 from app.services.spotify import (
+    SpotifyAccessDeniedError,
     import_spotify_playlist_url,
     import_spotify_playlists,
     refresh_spotify_playlist,
@@ -545,6 +546,10 @@ def import_playlists_task(
                     if playlist is not None
                     else import_spotify_playlists(db, source)
                 )
+                if summary.created or summary.updated:
+                    matching_summary = run_matching(
+                        db, source.user_id, playlist_id=playlist_id
+                    )
         elif source.service == ServiceEnum.yandex:
             summary = (
                 refresh_yandex_playlist(db, playlist)
@@ -563,6 +568,14 @@ def import_playlists_task(
             )
             result_status = "partial" if successful else "failed"
         if result_status == "failed":
+            if (
+                source.service == ServiceEnum.spotify
+                and int(summary_data.get("restricted", 0) or 0)
+                == int(summary_data.get("failed", 0) or 0)
+            ):
+                raise SpotifyAccessDeniedError(
+                    "Spotify allows importing only owned or collaborative playlists"
+                )
             raise PlaylistImportAllFailed("All provider playlists failed")
         final_payload = json.dumps(
             {
@@ -608,7 +621,21 @@ def import_playlists_task(
         return json.loads(final_payload)
     except Exception as exc:
         db.rollback()
-        retrying = self.request.retries < self.max_retries
+        retrying = (
+            not isinstance(exc, SpotifyAccessDeniedError)
+            and self.request.retries < self.max_retries
+        )
+        if isinstance(exc, SpotifyAccessDeniedError):
+            failure_message = (
+                "Spotify allows importing only owned or collaborative playlists"
+            )
+        elif retrying:
+            failure_message = (
+                f"Import attempt {self.request.retries + 1} failed "
+                f"({type(exc).__name__}); retry scheduled"
+            )
+        else:
+            failure_message = f"Playlist import failed ({type(exc).__name__})"
         updated_id = db.scalar(
             update(Job)
             .where(
@@ -620,12 +647,7 @@ def import_playlists_task(
             )
             .values(
                 status=JobStatus.pending if retrying else JobStatus.failed,
-                error=(
-                    f"Import attempt {self.request.retries + 1} failed "
-                    f"({type(exc).__name__}); retry scheduled"
-                    if retrying
-                    else f"Playlist import failed ({type(exc).__name__})"
-                ),
+                error=failure_message,
                 finished_at=None if retrying else utcnow(),
                 heartbeat_at=utcnow(),
                 lock_owner=None,

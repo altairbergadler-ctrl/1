@@ -70,13 +70,16 @@ Yandex fallback-контейнеры `.m4a`, `.aac`, `.mp3`; читает тег
 
 - `POST /api/sources/spotify/connect` — начало Spotify Authorization Code OAuth
   с session-bound state;
-- `GET /api/sources/spotify/callback` — callback с одноразовым Redis state;
+- `GET /api/sources/spotify/callback` — callback с одноразовым Redis state,
+  проверкой реального доступа к playlist API до сохранения токена и понятным
+  возвратом в PWA;
 - `PUT /api/providers/yandex/credentials` — проверка и атомарная ротация токена;
 - `PUT /api/providers/qobuz/credentials` — проверка и атомарная ротация token/user_id;
 - `GET /api/providers/health` — отдельное здоровье account/API/sidecar/worker;
 - `POST /api/providers/{provider}/health-check` — ручная фоновая проверка;
 - `GET /api/sources` — подключённые источники без выдачи токенов;
-- `POST /api/playlists/import` — фоновый импорт по `source_id`;
+- `POST /api/playlists/import` — фоновый импорт всех доступных плейлистов
+  источника по `source_id` с последующим matching;
 - `POST /api/playlists/import-url` — один Spotify-плейлист по ссылке через
   уже подключённый пользовательский OAuth;
 - `POST /api/playlists/import-content` — CSV/M3U/текст без provider OAuth;
@@ -88,15 +91,22 @@ Spotify требует `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и точн�
 `SPOTIFY_REDIRECT_URI`, зарегистрированного в приложении Spotify. Для
 локального запуска используйте
 `http://127.0.0.1:8000/api/sources/spotify/callback`: Spotify не принимает
-`localhost` как OAuth redirect URI. В текущем Development Mode содержимое
-плейлиста доступно только владельцу и соавторам; подписанные чужие плейлисты
-могут быть перечислены, но будут пропущены провайдером с `403`.
+`localhost` как OAuth redirect URI.
+
+В Spotify Development Mode владелец приложения заранее добавляет пользователя
+в Dashboard → Users Management; режим допускает не более пяти таких аккаунтов.
+OAuth может завершиться успешно и всё же дать `403` playlist API, если аккаунт
+не добавлен. Callback поэтому проверяет `/me/playlists` до сохранения нового
+токена: при отказе старый рабочий credential остаётся активным, а PWA показывает
+понятное сообщение. Содержимое импортируется только для плейлистов, которыми
+пользователь владеет или где он соавтор; остальные учитываются как
+`restricted` и пропускаются без остановки успешной части задания.
+
 System Yandex/Qobuz acquisition credentials вводятся owner на странице PWA
 «Провайдеры», проверяются до активации и хранятся в AES-256-GCM vault.
 Spotify и Yandex playlist credentials хранятся отдельно по `user_id`: OAuth
-одного пользователя не перезаписывает другого. Старое system-значение остаётся
-активным, если проверка нового завершилась ошибкой. Токены никогда не
-возвращаются API.
+одного пользователя не перезаписывает другого. Токены никогда не возвращаются
+API.
 
 Spotify пропускает неизменившиеся плейлисты по `snapshot_id`. Для
 Яндекс.Музыки вычисляется детерминированный SHA-256 по версии и упорядоченному

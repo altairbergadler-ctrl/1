@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import Job, JobScope, JobStatus, Playlist, PlaylistSource, ServiceEnum
-from app.services.spotify import SpotifyImportSummary
+from app.services.spotify import SpotifyAccessDeniedError, SpotifyImportSummary
 from app.services.yandex import YandexImportSummary
 from app.workers.celery_app import celery
 from app.workers.tasks import PlaylistImportAllFailed, import_playlists_task
@@ -40,6 +40,7 @@ def test_import_task_is_registered():
 def test_spotify_import_task_completes_job(session_factory, monkeypatch):
     job_id, source_id = _create_job_and_source(session_factory, ServiceEnum.spotify)
     calls: list[int] = []
+    matching_calls: list[tuple[int, int | None]] = []
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
     monkeypatch.setattr(
         "app.workers.tasks.import_spotify_playlists",
@@ -49,6 +50,13 @@ def test_spotify_import_task_completes_job(session_factory, monkeypatch):
             created=1,
             tracks_imported=2,
         ),
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks.run_matching",
+        lambda _db, user_id, *, playlist_id: matching_calls.append(
+            (user_id, playlist_id)
+        )
+        or SimpleNamespace(to_dict=lambda: {"processed": 2}),
     )
 
     result = import_playlists_task.run(job_id, source_id)
@@ -61,7 +69,35 @@ def test_spotify_import_task_completes_job(session_factory, monkeypatch):
     assert job.finished_at is not None
     assert json.loads(job.payload)["service"] == "spotify"
     assert json.loads(job.payload)["import"]["tracks_imported"] == 2
+    assert json.loads(job.payload)["matching"] == {"processed": 2}
+    assert len(matching_calls) == 1
     assert result["result_status"] == "completed"
+    check.close()
+
+
+def test_spotify_restriction_fails_without_retrying(
+    session_factory, monkeypatch
+):
+    job_id, source_id = _create_job_and_source(session_factory, ServiceEnum.spotify)
+    monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "app.workers.tasks.import_spotify_playlists",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SpotifyAccessDeniedError("restricted")
+        ),
+    )
+
+    with pytest.raises(SpotifyAccessDeniedError):
+        import_playlists_task.run(job_id, source_id)
+
+    check = session_factory()
+    job = check.get(Job, job_id)
+    assert job.status == JobStatus.failed
+    assert (
+        job.error
+        == "Spotify allows importing only owned or collaborative playlists"
+    )
+    assert job.finished_at is not None
     check.close()
 
 

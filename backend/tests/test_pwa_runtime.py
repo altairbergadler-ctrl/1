@@ -42,7 +42,7 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v15";' in service_worker
+    assert 'const CACHE_NAME = "lossless-archive-v16";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
 
@@ -73,6 +73,10 @@ def test_playlist_page_connects_spotify_before_importing_one_url():
     assert 'api("/api/playlists/import-url"' in app_script
     assert 'api("/api/sources")' in app_script
     assert 'data-action="spotify-connect"' in app_script
+    assert 'data-action="spotify-import-all"' in app_script
+    assert 'api("/api/playlists/import"' in app_script
+    assert "spotify_not_allowed" in app_script
+    assert "Development Mode" in app_script
     assert 'api("/api/sources/spotify/connect", { method: "POST" })' in app_script
     assert "window.location.assign(result.authorization_url)" in app_script
     assert "Client ID, Client Secret и пароль вводить в Audiofeel не нужно" in app_script
