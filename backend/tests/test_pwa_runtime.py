@@ -88,6 +88,7 @@ def test_pwa_uses_google_server_session_csrf_and_owner_user_admin():
     assert 'api("/api/auth/me"' in app_script
     assert 'headers.set("X-CSRF-Token", csrfToken)' in app_script
     assert 'api("/api/auth/logout", { method: "POST" })' in app_script
+    assert 'href="#/playlists">Плейлисты</a>' in app_script
     assert 'api("/api/admin/users")' in app_script
     assert 'id="user-invite-form"' in app_script
     assert 'data-action="user-disable"' in app_script

@@ -123,6 +123,7 @@ function shell(content) {
         </a>
         <nav class="nav-actions" aria-label="Основная навигация">
           <span class="current-user" title="Текущий пользователь">${escapeHtml(identity)}</span>
+          <a class="button ghost small" href="#/playlists">Плейлисты</a>
           ${ownerLinks}
           <a class="button ghost small" href="#/review">Review</a>
           <button class="ghost small" type="button" data-action="logout">Выйти</button>
