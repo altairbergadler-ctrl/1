@@ -115,6 +115,7 @@ IP и User-Agent не сохраняются.
 | `playlists` | обязательный `user_id` | composite FK гарантирует того же владельца, что у source |
 | CSV/M3U/TXT import | создавший пользователь | создаёт его `manual` source и playlist |
 | Spotify/Yandex playlist credential | `(user_id, provider)` | отдельная AES-GCM envelope на пользователя |
+| OpenSubsonic player credential | обязательный `user_id` | отдельный device key, raw показывается один раз |
 | import/matching/Qobuz/Yandex job | `scope=user`, обязательный `user_id` | source/playlist composite FK совпадает с owner |
 | health/scan/storage job | `scope=system`, `user_id=NULL` | видит только owner |
 | `Artist`, `Album`, `Track`, `File` | общие | не копируются на пользователя |
@@ -131,11 +132,14 @@ Download grant существует только через принадлежа
 | `user_provider_credentials` | пользователь | Spotify и Yandex playlist import |
 | `provider_credentials` | система | Qobuz/Yandex acquisition и health/rotation |
 | `storage_secrets` | infrastructure | Google Drive OAuth config и account refresh tokens |
+| `player_credentials` | пользователь + устройство | отдельный отзываемый OpenSubsonic API key; хранится только HMAC |
 
 Global Spotify credential после backfill удаляется из system vault и
 переносится bootstrap owner. Его исходная encrypted envelope временно хранится
 в `multitenancy_migration_credentials` только для lossless schema rollback.
-Секреты ни одним API response не возвращаются.
+Vault-секреты ни одним API response не возвращаются. Единственное исключение —
+raw player API key в ответе на создание устройства; list/revoke/admin API его
+никогда не повторяют.
 
 ## Авторизация endpoints
 
@@ -149,7 +153,7 @@ Global Spotify credential после backfill удаляется из system vau
 | `/api/jobs/{id}` | owner/user | собственные jobs; owner дополнительно видит system jobs |
 | `/api/admin/*` | owner | invitations, disable, session revocation |
 | `/api/providers/*`, `/api/storage/*`, `/api/library/*` | owner | system/infrastructure only |
-| будущий `/rest/*` | не реализован | обязан применять ту же grant-модель |
+| `/rest/*` | отдельный active player credential | browse/search/media только через собственный READY grant; foreign ID = missing ID |
 
 Все state-changing browser endpoints требуют одновременно действительную
 server session, exact `Origin`/`Referer`, отсутствие cross-site Fetch Metadata и
@@ -164,13 +168,26 @@ session-bound `X-CSRF-Token`. `SameSite=Lax` — дополнительный, �
 - `HttpOnly`, `Secure` в production, `SameSite=Lax`, `Path=/api`;
 - default absolute TTL 30 дней, idle TTL 7 дней, touch не чаще 5 минут;
 - logout ставит `revoked_at` до удаления cookie;
-- disable/revoke sessions немедленно отзывает все серверные записи;
+- disable/revoke sessions немедленно отзывает web sessions; disable пользователя
+  также отзывает все его player credentials;
 - после рестарта контейнера отозванная cookie остаётся недействительной.
 
 PWA получает CSRF token через `/api/auth/me` и держит его только в памяти.
 Session/CSRF/Google/provider tokens не записываются в `localStorage` или
 `sessionStorage`. Owner видит раздел «Пользователи»; роль `user` не видит
 system/provider/storage navigation и всё равно защищена серверным `403`.
+
+PWA показывает новый player API key один раз и держит его только в памяти до
+ухода со страницы. Service worker полностью обходит `/api/` и `/rest/`, поэтому
+URL с `apiKey` не попадает в Cache Storage.
+
+### Миграция 0010
+
+`0010_open_subsonic_players` добавляет device credentials, стабильные публичные
+UUID для artist/album/song/playlist и playlist sync metadata. Миграция не создаёт
+ключи автоматически, не меняет существующие primary IDs, `File.sha1`, local path
+или Drive location. После downgrade player credentials утрачиваются и должны
+быть созданы заново; каталог и пользовательские плейлисты сохраняются.
 
 ## APP_AUTH_TOKEN recovery
 

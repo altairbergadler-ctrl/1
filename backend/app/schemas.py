@@ -518,3 +518,26 @@ class StorageOverviewOut(BaseModel):
 class StorageAccountUpdateIn(BaseModel):
     enabled: bool | None = None
     priority: int | None = Field(default=None, ge=-1000, le=1000)
+
+
+class PlayerCredentialCreateIn(BaseModel):
+    label: str = Field(min_length=1, max_length=128)
+
+
+class PlayerCredentialOut(BaseModel):
+    id: str
+    label: str
+    auth_scheme: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class PlayerCredentialListOut(BaseModel):
+    items: list[PlayerCredentialOut]
+
+
+class PlayerCredentialCreatedOut(PlayerCredentialOut):
+    server_url: str
+    api_key: str

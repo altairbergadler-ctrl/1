@@ -297,6 +297,30 @@ Telegram notifications, dedup/upgrade policy и dashboard.
 
 ## 7. Ключевая история Git
 
+### OpenSubsonic iteration — локально реализовано, не опубликовано
+
+- additive `/rest/*` adapter и PWA-раздел «Плееры»;
+- per-device API keys с one-time display, HMAC storage, revoke и user-disable cascade;
+- stable public UUIDs и playlist sync revision на catalog/matching/storage mutations;
+- user-scoped browse/search/playlists/artwork/stream/download, `.view`, XML/JSON,
+  empty `search3`, Range/HEAD и original bytes без transcoding;
+- Alembic head `0010_open_subsonic_players`, проверенный upgrade → downgrade 0009
+  → upgrade на изолированном PostgreSQL;
+- Caddy `/rest/*` direct proxy и отключённый site access log, поскольку API key
+  по протоколу находится в query string;
+- review defects исправлены: discovery JSON соответствует OpenSubsonic, `/rest/`
+  исключён из browser cache, metadata/delivery используют единый playable source,
+  public IDs переживают retag, revision выполняется один раз на transaction;
+- локальная проверка: полный backend suite `315 passed, 5 skipped`, PostgreSQL
+  migration + idempotent rerun, frontend image/nginx, Compose и Caddy validation прошли;
+- production остаётся на `0408391`; deployment, миграция production и real-phone
+  Symfonium acceptance не выполнялись.
+
+Перед продолжением прочитать `docs/open-subsonic-integration-plan.md` и
+`docs/player-sync-symfonium.md`. Следующий
+разрешённый шаг — review/доработка локальной реализации. Публикация и production
+по-прежнему требуют отдельного подтверждения.
+
 - `2ac6e91` — Stage 4: matching, delivery, PWA.
 - `15eedb3` — live PWA manifest media type.
 - `8da6f75` — live Yandex import compatibility.

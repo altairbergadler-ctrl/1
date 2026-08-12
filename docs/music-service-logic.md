@@ -245,6 +245,20 @@ match на общий `Track/File`. Чужой item, playlist или album во�
 
 ## 9. Сквозной сценарий (end-to-end flow)
 
+### OpenSubsonic delivery flow
+
+1. Активный пользователь создаёт отдельный device key через Google-session + CSRF.
+2. Symfonium передаёт только `apiKey`; web/provider/recovery credentials не подходят.
+3. Каждый `/rest/*` catalog query начинается с собственных Playlist → PlaylistItem
+   → READY Match → Track → реально доступный File.
+4. Публичные artist/album/song/playlist IDs стабильны и не содержат user ID или email.
+5. Изменение видимого порядка, metadata, READY или storage availability увеличивает
+   playlist revision; no-op транзакция revision не меняет.
+6. Stream/download повторно проверяет grant и отдаёт local или Drive object с Range
+   и исходными байтами. Transcoding отсутствует.
+7. Disable user атомарно отзывает web sessions и все player keys; уже сохранённые на
+   телефоне offline bytes сервер удалить не может.
+
 ```
 1. Пользователь подключает Spotify/Яндекс либо импортирует CSV/M3U/текст.
 2. Matching Engine сопоставляет треки с каталогом:

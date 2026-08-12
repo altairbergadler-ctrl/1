@@ -176,3 +176,33 @@ def test_playlist_renders_persisted_yandex_track_progress_and_quality():
     assert "FLAC предпочтительно, AAC/MP3 fallback" in app_script
     assert "лучший доступный AAC/MP3 без перекодирования" in app_script
     assert "entry.error_detail" in app_script
+
+
+def test_player_page_uses_one_time_memory_only_api_key():
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    app_script = (root / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/players"' in app_script
+    assert 'api("/api/player-credentials"' in app_script
+    assert "state.playerSecret" in app_script
+    assert "localStorage" not in app_script
+    assert "sessionStorage" not in app_script
+    assert "data-api-key" not in app_script
+
+
+def test_service_worker_never_caches_opensubsonic_credentials():
+    service_worker = (
+        Path(__file__).resolve().parents[2] / "frontend" / "service-worker.js"
+    ).read_text(encoding="utf-8")
+    assert 'url.pathname.startsWith("/rest/")' in service_worker
+    assert 'url.pathname === "/rest"' in service_worker
+    assert 'url.searchParams.has(name)' in service_worker
+
+
+def test_opensubsonic_query_secrets_are_excluded_from_access_logs():
+    root = Path(__file__).resolve().parents[2]
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    nginx = (root / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    caddy = (root / "deploy" / "vps" / "Caddyfile").read_text(encoding="utf-8")
+    assert "--no-access-log" in compose
+    assert "access_log off;" in nginx
+    assert "output discard" in caddy

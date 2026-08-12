@@ -259,6 +259,44 @@ button[disabled] {
   margin-bottom: 24px;
 }
 
+.copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  margin-top: 0.4rem;
+}
+
+.player-secret-card {
+  border-color: var(--accent, #d0a84c);
+}
+
+.player-secret-card label {
+  display: block;
+  margin-top: 1rem;
+}
+
+.credential-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.credential-row,
+.card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.credential-row {
+  padding: 0.9rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.player-help li + li {
+  margin-top: 0.55rem;
+}
+
 .current-user {
   max-width: 220px;
   overflow: hidden;

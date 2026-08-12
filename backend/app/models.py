@@ -1,4 +1,5 @@
 import enum
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
@@ -30,6 +31,10 @@ def enum_values(enum_class):
 
 def utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def new_public_id() -> str:
+    return str(uuid.uuid4())
 
 
 class ServiceEnum(str, enum.Enum):
@@ -116,6 +121,9 @@ class User(Base):
     sessions = relationship(
         "UserSession", back_populates="user", cascade="all, delete-orphan"
     )
+    player_credentials = relationship(
+        "PlayerCredential", back_populates="user", cascade="all, delete-orphan"
+    )
     provider_credentials = relationship(
         "UserProviderCredential", back_populates="user", cascade="all, delete-orphan"
     )
@@ -172,6 +180,28 @@ class UserSession(Base):
     )
 
 
+class PlayerCredential(Base):
+    """One revocable OpenSubsonic API key; plaintext is never persisted."""
+
+    __tablename__ = "player_credentials"
+    id = Column(String(36), primary_key=True, default=new_public_id)
+    user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    label = Column(String(128), nullable=False)
+    public_handle = Column(String(32), nullable=False, unique=True)
+    secret_hash = Column(LargeBinary(32), nullable=False)
+    auth_scheme = Column(String(32), nullable=False, default="api_key_v1")
+    key_id = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    last_used_at = Column(DateTime)
+    expires_at = Column(DateTime)
+    revoked_at = Column(DateTime)
+    user = relationship("User", back_populates="player_credentials")
+    __table_args__ = (
+        Index("ix_player_credentials_user_active", "user_id", "revoked_at"),
+        Index("ix_player_credentials_expires_at", "expires_at"),
+    )
+
+
 class GoogleLoginAttempt(Base):
     __tablename__ = "google_login_attempts"
     id = Column(String(36), primary_key=True)
@@ -219,6 +249,11 @@ class Playlist(Base):
     snapshot_hash = Column(String(256))
     track_count = Column(Integer, default=0)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+    opensubsonic_id = Column(String(36), nullable=False, unique=True, default=new_public_id)
+    sync_revision = Column(BigInteger, nullable=False, default=1)
+    sync_changed_at = Column(DateTime, nullable=False, default=utcnow)
+    sync_fingerprint = Column(LargeBinary(32), nullable=False, default=b"")
     source = relationship(
         "PlaylistSource", back_populates="playlists", overlaps="playlists,user"
     )
@@ -275,6 +310,7 @@ class Artist(Base):
     name = Column(String(512), nullable=False)
     name_norm = Column(String(512), unique=True, nullable=False)
     mbid = Column(String(64))
+    opensubsonic_id = Column(String(36), nullable=False, unique=True, default=new_public_id)
     albums = relationship("Album", back_populates="artist")
 
 
@@ -286,6 +322,7 @@ class Album(Base):
     title_norm = Column(String(512), nullable=False)
     year = Column(Integer)
     mbid = Column(String(64))
+    opensubsonic_id = Column(String(36), nullable=False, unique=True, default=new_public_id)
     artist = relationship("Artist", back_populates="albums")
     tracks = relationship("Track", back_populates="album")
     __table_args__ = (
@@ -306,6 +343,7 @@ class Track(Base):
     duration_ms = Column(Integer)
     isrc = Column(String(32), index=True)
     mbid = Column(String(64))
+    opensubsonic_id = Column(String(36), nullable=False, unique=True, default=new_public_id)
     album = relationship("Album", back_populates="tracks")
     files = relationship("File", back_populates="track")
     __table_args__ = (

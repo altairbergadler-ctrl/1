@@ -15,6 +15,7 @@ from app.services.authentication import (
     normalize_email,
     revoke_user_sessions,
 )
+from app.services.player_credentials import revoke_all_player_credentials
 
 router = APIRouter()
 
@@ -118,6 +119,7 @@ def disable_user(
             raise HTTPException(status_code=409, detail="The last active owner cannot be disabled")
     target.state = UserState.disabled
     revoke_user_sessions(db, target.id)
+    revoke_all_player_credentials(db, target.id)
     db.commit()
     db.refresh(target)
     return _user_out(db, target)

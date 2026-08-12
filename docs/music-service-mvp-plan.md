@@ -229,32 +229,33 @@ Spotify/Yandex OAuth ──▶ playlist_items (raw + norm + isrc)
 
 ---
 
-## 8. Исследование OpenSubsonic-интеграции (после MVP acceptance)
+## 8. OpenSubsonic-интеграция (после MVP acceptance)
 
-Это отдельная research/design-итерация после тега `v0.1.0` и до начала
-Release 2. Она не включает реализацию API, миграции БД или замену
-текущей PWA.
+Read-only adapter реализован локально отдельной итерацией после `v0.1.0` и до
+Release 2. Production migration и реальная phone-приёмка ещё не разрешены.
 
-- [ ] Изучить актуальную спецификацию OpenSubsonic и выделить минимальный
+- [x] Изучить актуальную спецификацию OpenSubsonic и выделить минимальный
   read-only профиль для каталога, плейлистов, streaming и download.
-- [ ] Составить матрицу совместимости клиентов: Symfonium (Android),
+- [x] Составить матрицу совместимости клиентов: Symfonium (Android),
   Ultrasonic (Android), Amperfy (iOS/iPadOS) и один desktop-клиент.
-- [ ] Проверить методы авторизации: Subsonic token+salt и OpenSubsonic API key;
+- [x] Проверить методы авторизации: Subsonic token+salt и OpenSubsonic API key;
   не переиспользовать `APP_AUTH_TOKEN` как пароль плеера.
-- [ ] Сопоставить OpenSubsonic endpoints с текущей БД и API: `ping`,
+- [x] Реализовать минимальный `/rest/*` profile в существующем FastAPI: `ping`,
   `getMusicFolders`, `getArtists`, `getArtist`, `getAlbum`, `getSong`, `search3`,
   `getPlaylists`, `getPlaylist`, `stream`, `download`, `getCoverArt`.
-- [ ] Отдельно изучить поведение импортированных Spotify/Яндекс
+- [x] Закрепить поведение импортированных Spotify/Яндекс
   плейлистов: только `READY`-треки, `readonly`, порядок треков и
   обновление «Мне нравится».
 - [ ] На реальных устройствах проверить FLAC/Hi-Res, HTTP Range, gapless,
   Unicode-метаданные, большие плейлисты, ручной и автоматический
   offline-cache, повторную синхронизацию и работу через Tailscale HTTPS.
-- [ ] Описать модель угроз: учётные данные плеера, отзыв доступа,
+- [x] Описать модель угроз: учётные данные плеера, отзыв доступа,
   rate limit, пределы Tailscale-сети и запрет публичного Funnel по умолчанию.
-- [ ] Создать `docs/open-subsonic-integration-plan.md` с выбранным профилем
+- [x] Создать `docs/open-subsonic-integration-plan.md` с выбранным профилем
   совместимости, картой endpoints, этапами реализации, тестами,
   рисками, оценкой объёма и явными границами scope.
+- [x] Создать `docs/player-sync-symfonium.md` как отдельный, пока не выполненный
+  production/phone acceptance runbook.
 
 ### Security/legal gate: `qobuz-dl`
 

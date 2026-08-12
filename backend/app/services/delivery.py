@@ -75,7 +75,7 @@ def safe_filename(value: str, *, fallback: str = "download", limit: int = 180) -
     return cleaned[:limit].rstrip(" .") or fallback
 
 
-def _quality_key(file: LibraryFile) -> tuple[int, int, int, int]:
+def playable_file_quality(file: LibraryFile) -> tuple[int, int, int, int]:
     return (
         int(file.bit_depth or 0),
         int(file.sample_rate or 0),
@@ -109,6 +109,7 @@ def _remote_ref(file: LibraryFile) -> RemoteDeliveryRef | None:
         location
         for location in file.drive_locations
         if location.state == "healthy"
+        and location.account is not None
         and location.account.enabled
         and location.account.state == "healthy"
     ]
@@ -131,11 +132,11 @@ def _remote_ref(file: LibraryFile) -> RemoteDeliveryRef | None:
     )
 
 
-def _best_playable_file(
+def best_playable_file(
     track: Track,
 ) -> tuple[LibraryFile, Path | None, RemoteDeliveryRef | None]:
     unavailable = False
-    for file in sorted(track.files, key=_quality_key, reverse=True):
+    for file in sorted(track.files, key=playable_file_quality, reverse=True):
         try:
             return file, _safe_library_path(file.path), _remote_ref(file)
         except DeliveryFileUnavailable:
@@ -148,19 +149,47 @@ def _best_playable_file(
     raise DeliveryFileUnavailable("Matched track has no file")
 
 
+def playable_file_suffix(
+    file: LibraryFile,
+    path: Path | None,
+    remote: RemoteDeliveryRef | None,
+) -> str:
+    """Return the suffix of the source that delivery will actually read."""
+
+    value = (
+        (path.suffix if path is not None else "")
+        or (Path(remote.remote_name).suffix if remote is not None else "")
+        or (f".{file.format}" if file.format else "")
+    )
+    return value.removeprefix(".").casefold()
+
+
+def playable_file_size(
+    file: LibraryFile,
+    path: Path | None,
+    remote: RemoteDeliveryRef | None,
+) -> int | None:
+    """Return the byte length of the source that delivery will actually read."""
+
+    if path is not None:
+        try:
+            return path.stat().st_size
+        except OSError as exc:
+            raise DeliveryFileUnavailable("Matched file is unavailable") from exc
+    if remote is not None:
+        return remote.size_bytes
+    return file.size_bytes
+
+
 def _entry_for_track(
     track: Track,
     *,
     filename_prefix: str | None = None,
 ) -> DeliveryEntry:
-    file, path, remote = _best_playable_file(track)
+    file, path, remote = best_playable_file(track)
     artist = track.album.artist.name
-    remote_suffix = Path(remote.remote_name).suffix if remote is not None else ""
-    extension = (
-        (path.suffix if path is not None else "")
-        or remote_suffix
-        or (f".{file.format}" if file.format else "")
-    )
+    suffix = playable_file_suffix(file, path, remote)
+    extension = f".{suffix}" if suffix else ""
     stem = safe_filename(f"{artist} - {track.title}", fallback=f"track-{track.id}")
     filename = f"{stem}{extension.casefold()}"
     if filename_prefix:

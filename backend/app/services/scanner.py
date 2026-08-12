@@ -527,10 +527,103 @@ def _get_or_create_track(db: Session, album: Album, metadata: AudioMetadata) -> 
     return track
 
 
-def _apply_replacement_metadata(track: Track, metadata: AudioMetadata) -> None:
+def _retag_stable_lineage(
+    db: Session,
+    track: Track,
+    metadata: AudioMetadata,
+    *,
+    clear_missing_enrichment: bool = False,
+) -> bool:
+    """Update display metadata without replacing OpenSubsonic identities."""
+
+    album = track.album
+    artist = album.artist
+    artist_norm = normalize_artist(metadata.artist)
+    album_norm = normalize_album(metadata.album)
+    title_norm = normalize_title(metadata.title)
+    artist_conflict = db.scalar(
+        select(Artist.id).where(
+            Artist.id != artist.id,
+            Artist.name_norm == artist_norm,
+        )
+    )
+    album_conflict = db.scalar(
+        select(Album.id).where(
+            Album.id != album.id,
+            Album.artist_id == artist.id,
+            Album.title_norm == album_norm,
+            _nullable_equals(Album.year, metadata.year),
+        )
+    )
+    track_conflict = db.scalar(
+        select(Track.id).where(
+            Track.id != track.id,
+            Track.album_id == album.id,
+            Track.title_norm == title_norm,
+            _nullable_equals(Track.track_no, metadata.track_no),
+            _nullable_equals(Track.disc_no, metadata.disc_no),
+        )
+    )
+    if any(value is not None for value in (artist_conflict, album_conflict, track_conflict)):
+        raise ScannerError("Retag conflicts with an existing catalog identity")
+    changed = (
+        artist.name != metadata.artist
+        or artist.name_norm != artist_norm
+        or album.title != metadata.album
+        or album.title_norm != album_norm
+        or album.year != metadata.year
+        or track.title != metadata.title
+        or track.title_norm != title_norm
+        or track.track_no != metadata.track_no
+        or track.disc_no != metadata.disc_no
+        or track.duration_ms != metadata.duration_ms
+        or (
+            (clear_missing_enrichment or metadata.isrc is not None)
+            and track.isrc != metadata.isrc
+        )
+        or (
+            (clear_missing_enrichment or metadata.track_mbid is not None)
+            and track.mbid != metadata.track_mbid
+        )
+    )
+    artist.name = metadata.artist
+    artist.name_norm = artist_norm
+    if metadata.artist_mbid is not None:
+        artist.mbid = metadata.artist_mbid
+    album.title = metadata.album
+    album.title_norm = album_norm
+    album.year = metadata.year
+    if metadata.album_mbid is not None:
+        album.mbid = metadata.album_mbid
+    track.title = metadata.title
+    track.title_norm = title_norm
+    track.track_no = metadata.track_no
+    track.disc_no = metadata.disc_no
     track.duration_ms = metadata.duration_ms
-    track.isrc = metadata.isrc
-    track.mbid = metadata.track_mbid
+    if clear_missing_enrichment or metadata.isrc is not None:
+        track.isrc = metadata.isrc
+    if clear_missing_enrichment or metadata.track_mbid is not None:
+        track.mbid = metadata.track_mbid
+    db.flush()
+    return changed
+
+
+def _prune_orphaned_album(db: Session, album_id: int | None) -> None:
+    if album_id is None or db.scalar(
+        select(Track.id).where(Track.album_id == album_id).limit(1)
+    ) is not None:
+        return
+    album = db.get(Album, album_id)
+    if album is None:
+        return
+    artist_id = album.artist_id
+    db.delete(album)
+    db.flush()
+    if db.scalar(select(Album.id).where(Album.artist_id == artist_id).limit(1)) is None:
+        artist = db.get(Artist, artist_id)
+        if artist is not None:
+            db.delete(artist)
+            db.flush()
 
 
 def _carry_catalog_enrichment(old_track: Track, new_track: Track) -> None:
@@ -624,18 +717,8 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
         same_hash.bit_depth = metadata.bit_depth
         same_hash.sample_rate = metadata.sample_rate
         if same_hash.path == metadata.path:
-            old_track = same_hash.track
-            old_track_id = same_hash.track_id
-            artist = _get_or_create_artist(db, metadata)
-            album = _get_or_create_album(db, artist, metadata)
-            track = _get_or_create_track(db, album, metadata)
-            if old_track_id != track.id:
-                _carry_catalog_enrichment(old_track, track)
-                same_hash.track = track
-                db.flush()
-                _prune_orphaned_track(db, old_track_id)
-                return "updated", album.id
-            return "unchanged", album.id
+            changed = _retag_stable_lineage(db, same_hash.track, metadata)
+            return ("updated" if changed else "unchanged"), same_hash.track.album_id
 
         album_id = same_hash.track.album_id
 
@@ -645,30 +728,19 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
             db.flush()
             _prune_orphaned_track(db, stale_track_id)
         if same_hash.path is None or not Path(same_hash.path).exists():
-            old_track = same_hash.track
-            old_track_id = same_hash.track_id
-            artist = _get_or_create_artist(db, metadata)
-            album = _get_or_create_album(db, artist, metadata)
-            track = _get_or_create_track(db, album, metadata)
-            if old_track_id != track.id:
-                _carry_catalog_enrichment(old_track, track)
-            same_hash.track = track
+            _retag_stable_lineage(db, same_hash.track, metadata)
             same_hash.path = metadata.path
             db.flush()
-            if old_track_id != track.id:
-                _prune_orphaned_track(db, old_track_id)
-            return "moved", album.id
+            return "moved", same_hash.track.album_id
         return "duplicate_content", album_id
 
-    artist = _get_or_create_artist(db, metadata)
-    album = _get_or_create_album(db, artist, metadata)
-    track = _get_or_create_track(db, album, metadata)
-
     if same_path is not None:
-        old_track_id = same_path.track_id
-        if old_track_id == track.id:
-            _apply_replacement_metadata(track, metadata)
-        same_path.track = track
+        _retag_stable_lineage(
+            db,
+            same_path.track,
+            metadata,
+            clear_missing_enrichment=True,
+        )
         same_path.sha1 = metadata.sha1
         same_path.format = metadata.format
         same_path.bit_depth = metadata.bit_depth
@@ -676,9 +748,11 @@ def upsert_audio_file(db: Session, metadata: AudioMetadata) -> tuple[str, int]:
         same_path.size_bytes = metadata.size_bytes
         same_path.scanned_at = now
         db.flush()
-        if old_track_id != track.id:
-            _prune_orphaned_track(db, old_track_id)
-        return "updated", album.id
+        return "updated", same_path.track.album_id
+
+    artist = _get_or_create_artist(db, metadata)
+    album = _get_or_create_album(db, artist, metadata)
+    track = _get_or_create_track(db, album, metadata)
 
     db.add(
         LibraryFile(

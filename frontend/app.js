@@ -6,6 +6,7 @@ const state = {
   currentUser: null,
   csrfToken: null,
   recoveryCsrfToken: null,
+  playerSecret: null,
   statusFilter: "ALL",
   qobuzWatchToken: 0,
   yandexWatchToken: 0,
@@ -87,6 +88,7 @@ async function api(path, options = {}) {
     state.authenticated = false;
     state.currentUser = null;
     state.csrfToken = null;
+    state.playerSecret = null;
     renderLogin();
     throw new Error("Сессия завершена. Войдите снова.");
   }
@@ -124,6 +126,7 @@ function shell(content) {
         <nav class="nav-actions" aria-label="Основная навигация">
           <span class="current-user" title="Текущий пользователь">${escapeHtml(identity)}</span>
           <a class="button ghost small" href="#/playlists">Плейлисты</a>
+          <a class="button ghost small" href="#/players">Плееры</a>
           ${ownerLinks}
           <a class="button ghost small" href="#/review">Review</a>
           <button class="ghost small" type="button" data-action="logout">Выйти</button>
@@ -173,12 +176,109 @@ async function logout() {
   state.authenticated = false;
   state.currentUser = null;
   state.csrfToken = null;
+  state.playerSecret = null;
   window.location.hash = "";
   renderLogin();
 }
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString("ru-RU") : "—";
+}
+
+async function renderPlayers() {
+  loadingPage("Настраиваем плееры");
+  try {
+    const data = await api("/api/player-credentials");
+    const secret = state.playerSecret;
+    app.innerHTML = shell(`
+      <main>
+        <section class="page-header">
+          <div>
+            <p class="eyebrow">OPENSubsonic · SYMFONIUM</p>
+            <h1>Плееры</h1>
+            <p class="lede">Отдельный ключ для каждого телефона. Отзыв ключа блокирует новые запросы, но не удаляет уже скачанную музыку.</p>
+          </div>
+        </section>
+        ${secret ? `
+          <section class="card player-secret-card" aria-live="polite">
+            <h2>Сохраните ключ сейчас</h2>
+            <p>После ухода со страницы ключ больше не показывается.</p>
+            <label>Адрес сервера
+              <span class="copy-row"><input readonly value="${escapeHtml(secret.server_url)}"><button type="button" data-action="copy-player-value" data-copy="server">Копировать</button></span>
+            </label>
+            <label>API Key
+              <span class="copy-row"><input readonly value="${escapeHtml(secret.api_key)}"><button type="button" data-action="copy-player-value" data-copy="key">Копировать</button></span>
+            </label>
+          </section>` : ""}
+        <section class="card">
+          <h2>Новый ключ</h2>
+          <form id="player-credential-form" class="inline-form">
+            <label>Название устройства<input name="label" maxlength="128" required placeholder="Мой телефон"></label>
+            <button type="submit">Создать ключ</button>
+            <p class="form-error" role="alert"></p>
+          </form>
+        </section>
+        <section class="card player-help">
+          <h2>Настройка Symfonium</h2>
+          <ol>
+            <li>Добавьте провайдер OpenSubsonic и укажите полный HTTPS-адрес сервера.</li>
+            <li>Выберите API Key. Legacy auth и Compatibility mode оставьте выключенными.</li>
+            <li>Включите Ignore server transcoding / Original.</li>
+            <li>Импортируйте плейлист в режиме Read only и настройте automatic offline cache.</li>
+          </ol>
+        </section>
+        <section class="card">
+          <div class="card-heading"><h2>Выданные ключи</h2>${data.items.some((row) => !row.revoked_at) ? '<button class="danger ghost" type="button" data-action="player-revoke-all">Отозвать все</button>' : ""}</div>
+          ${data.items.length ? `<div class="credential-list">${data.items.map((row) => `
+            <article class="credential-row">
+              <div><strong>${escapeHtml(row.label)}</strong><p class="muted">Создан: ${formatDate(row.created_at)} · Последнее использование: ${formatDate(row.last_used_at)}</p></div>
+              ${row.revoked_at ? '<span class="status-pill disabled">Отозван</span>' : `<button class="danger ghost" type="button" data-action="player-revoke" data-credential-id="${escapeHtml(row.id)}">Отозвать</button>`}
+            </article>`).join("")}</div>` : '<p class="muted">Ключей пока нет.</p>'}
+        </section>
+      </main>
+    `);
+  } catch (exception) {
+    showToast(exception.message);
+  }
+}
+
+async function createPlayerCredential(form) {
+  const error = form.querySelector(".form-error");
+  error.textContent = "";
+  try {
+    const created = await api("/api/player-credentials", {
+      method: "POST",
+      body: JSON.stringify({ label: form.elements.label.value }),
+    });
+    state.playerSecret = { server_url: created.server_url, api_key: created.api_key };
+    await renderPlayers();
+  } catch (exception) {
+    error.textContent = exception.message;
+  }
+}
+
+async function revokePlayerCredential(button) {
+  button.disabled = true;
+  try {
+    await api(`/api/player-credentials/${encodeURIComponent(button.dataset.credentialId)}/revoke`, { method: "POST" });
+    state.playerSecret = null;
+    await renderPlayers();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
+}
+
+async function revokeAllPlayerCredentials(button) {
+  button.disabled = true;
+  try {
+    await api("/api/player-credentials/revoke-all", { method: "POST" });
+    state.playerSecret = null;
+    await renderPlayers();
+  } catch (exception) {
+    showToast(exception.message);
+    button.disabled = false;
+  }
 }
 
 function userAdminCard(user) {
@@ -1590,6 +1690,7 @@ async function route() {
     renderLogin();
     return;
   }
+  if (window.location.hash !== "#/players") state.playerSecret = null;
   const match = window.location.hash.match(/^#\/playlist\/(\d+)$/);
   if (match) {
     await renderPlaylist(Number(match[1]));
@@ -1601,6 +1702,8 @@ async function route() {
     await renderProviders();
   } else if (window.location.hash === "#/review") {
     await renderReview();
+  } else if (window.location.hash === "#/players") {
+    await renderPlayers();
   } else {
     if (window.location.hash !== "#/playlists") {
       window.location.hash = "#/playlists";
@@ -1622,6 +1725,10 @@ app.addEventListener("submit", (event) => {
   if (event.target.id === "user-invite-form") {
     event.preventDefault();
     inviteUser(event.target);
+  }
+  if (event.target.id === "player-credential-form") {
+    event.preventDefault();
+    createPlayerCredential(event.target);
   }
   if (["qobuz-credential-form", "yandex-credential-form"].includes(event.target.id)) {
     event.preventDefault();
@@ -1670,6 +1777,12 @@ app.addEventListener("click", (event) => {
   if (action === "storage-health") runStorageHealth(button);
   if (action === "storage-migrate") migrateLocalStorage(button);
   if (action === "resolve") resolveCandidate(button);
+  if (action === "player-revoke") revokePlayerCredential(button);
+  if (action === "player-revoke-all") revokeAllPlayerCredentials(button);
+  if (action === "copy-player-value") {
+    const value = button.dataset.copy === "server" ? state.playerSecret?.server_url : state.playerSecret?.api_key;
+    if (value) navigator.clipboard.writeText(value).then(() => showToast("Скопировано")).catch(() => showToast("Не удалось скопировать"));
+  }
   if (action === "filter") {
     state.statusFilter = button.dataset.status;
     applyFilter();

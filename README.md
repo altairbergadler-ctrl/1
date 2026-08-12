@@ -346,7 +346,22 @@ Sidecar отдельно проверяет allowlist,
 
 ## Структура
 
+### OpenSubsonic и Symfonium
+
+В репозитории реализован read-only OpenSubsonic adapter `/rest/*` для Symfonium.
+Пользователь создаёт отдельный API key в PWA-разделе «Плееры»; ключ показывается
+один раз, а в БД хранится только HMAC. Browse, search, playlists, artwork, stream
+и download ограничены собственными `READY`-элементами с доступным local/Drive
+файлом. Сервер не транскодирует звук и сохраняет исходные байты и HTTP Range.
+
+Полный security, migration, rollback и phone-acceptance contract:
+`docs/open-subsonic-integration-plan.md`. Пошаговая настройка и отдельный
+initial/add/remove/offline runbook находятся в `docs/player-sync-symfonium.md`.
+Production migration и реальная Symfonium-приёмка выполняются только отдельным
+операционным шагом.
+
 - `backend/app/api/` — роутеры API, включая matching/download/auth/qobuz
+- `backend/app/opensubsonic/` — API-key auth, scoped catalog, protocol и artwork
 - `backend/app/models.py` — схема БД из MVP-плана
 - `backend/app/services/scanner.py` — локальный lossless-каталог
 - `backend/app/services/musicbrainz.py` — внешнее обогащение и Redis-кэш

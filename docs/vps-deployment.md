@@ -180,6 +180,23 @@ bootstrap owner. После успешного Google-входа recovery ост
 
 ## Проверенный двухаккаунтный production gate
 
+## OpenSubsonic deployment gate
+
+Эта часть ещё не применялась к production. Перед её включением обязательны:
+
+1. PostgreSQL custom dump, `pg_restore --list` и пробное восстановление.
+2. Upgrade до `0010_open_subsonic_players`; проверить, что player key rows не
+   создавались автоматически и File/SHA-1/Drive rows не изменились.
+3. Caddy route `/rest/*` напрямую на backend. Site access log должен быть выключен:
+   OpenSubsonic API key передаётся в query string.
+4. Backend/PWA regression suite, health всех контейнеров и проверка deployed SHA.
+5. Только затем отдельная real-phone Symfonium acceptance по
+   `docs/player-sync-symfonium.md`.
+
+Rollback приложения выполняется вместе с downgrade до 0009; device keys после
+этого утрачиваются и создаются заново. Multi-user downgrade ниже 0009 остаётся
+запрещён прежним production-контрактом.
+
 На 2026-08-12 в production выполнен полный runbook: test-user allowlist,
 неприглашённый `403` без DB side effects, owner invitation, first-login binding,
 двусторонние IDOR-пробы, shared-File Range delivery, независимый Spotify vault,

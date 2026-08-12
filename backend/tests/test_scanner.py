@@ -346,7 +346,7 @@ def test_repeat_scan_relinks_legacy_catalog_norms_without_changing_file(
 
     assert result.updated == 1
     assert result.unchanged == 2
-    assert library_file.track_id != old_track_id
+    assert library_file.track_id == old_track_id
     assert library_file.track.album.artist.name_norm == "fallback artist"
     assert library_file.track.album.title_norm == "fallback album"
     assert library_file.track.title_norm == "fallback title"
@@ -397,6 +397,12 @@ def test_broken_flac_is_reported_without_rolling_back_good_files(
 def test_moved_untagged_file_rebuilds_path_fallback_catalog(db, three_flac_library):
     scan_library(db, three_flac_library)
     source = next(three_flac_library.rglob("03 - Fallback Title.flac"))
+    original = db.scalar(select(File).where(File.path == str(source.resolve())))
+    stable_ids = (
+        original.track.opensubsonic_id,
+        original.track.album.opensubsonic_id,
+        original.track.album.artist.opensubsonic_id,
+    )
     destination = (
         three_flac_library
         / "Moved Artist"
@@ -415,6 +421,11 @@ def test_moved_untagged_file_rebuilds_path_fallback_catalog(db, three_flac_libra
     assert moved_file.track.album.title == "Moved Album"
     assert moved_file.track.album.year == 2005
     assert moved_file.track.album.artist.name == "Moved Artist"
+    assert (
+        moved_file.track.opensubsonic_id,
+        moved_file.track.album.opensubsonic_id,
+        moved_file.track.album.artist.opensubsonic_id,
+    ) == stable_ids
     assert db.scalar(select(Artist).where(Artist.name == "Fallback Artist")) is None
     assert _count(db, File) == 3
     assert _count(db, Track) == 3
@@ -423,6 +434,12 @@ def test_moved_untagged_file_rebuilds_path_fallback_catalog(db, three_flac_libra
 def test_retagged_file_updates_path_row_and_prunes_old_catalog(db, three_flac_library):
     scan_library(db, three_flac_library)
     path = next(three_flac_library.rglob("03 - Fallback Title.flac"))
+    original = db.scalar(select(File).where(File.path == str(path.resolve())))
+    stable_ids = (
+        original.track.opensubsonic_id,
+        original.track.album.opensubsonic_id,
+        original.track.album.artist.opensubsonic_id,
+    )
     audio = FLAC(path)
     audio["artist"] = ["Replacement Artist"]
     audio["album"] = ["Replacement Album"]
@@ -440,6 +457,11 @@ def test_retagged_file_updates_path_row_and_prunes_old_catalog(db, three_flac_li
     assert replacement.isrc == "GBBBB2500002"
     assert replacement.album.title == "Replacement Album"
     assert replacement.album.artist.name == "Replacement Artist"
+    assert (
+        replacement.opensubsonic_id,
+        replacement.album.opensubsonic_id,
+        replacement.album.artist.opensubsonic_id,
+    ) == stable_ids
     assert db.scalar(select(Artist).where(Artist.name == "Fallback Artist")) is None
     assert _count(db, File) == 3
     assert _count(db, Track) == 3

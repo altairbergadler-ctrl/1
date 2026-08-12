@@ -25,7 +25,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
+  const hasCredentialQuery = ["apiKey", "u", "p", "t", "s"]
+    .some((name) => url.searchParams.has(name));
+  if (
+    request.method !== "GET"
+    || url.origin !== self.location.origin
+    || url.pathname.startsWith("/api/")
+    || url.pathname === "/rest"
+    || url.pathname.startsWith("/rest/")
+    || hasCredentialQuery
+  ) {
     return;
   }
   if (request.mode === "navigate") {

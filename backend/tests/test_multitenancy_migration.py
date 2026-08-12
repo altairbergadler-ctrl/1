@@ -133,7 +133,11 @@ def test_expand_backfill_contract_is_idempotent_and_losslessly_reversible(tmp_pa
     assert '"status":"already_current"' in second.stdout
 
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_google_user_auth_contract"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_open_subsonic_players"
+        assert connection.scalar(text("SELECT count(*) FROM player_credentials")) == 0
+        assert connection.scalar(
+            text("SELECT count(*) FROM playlists WHERE opensubsonic_id IS NULL")
+        ) == 0
         owner_id = connection.scalar(text("SELECT id FROM users WHERE is_bootstrap_owner = 1"))
         assert owner_id is not None
         assert connection.scalar(text("SELECT user_id FROM playlist_sources WHERE id = 11")) == owner_id

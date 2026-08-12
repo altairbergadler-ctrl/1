@@ -3,6 +3,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api import auth as auth_api
+from app.api import player_credentials
+from app.api import opensubsonic
 from app.api import (
     admin,
     download,
@@ -18,6 +20,7 @@ from app.api import (
 )
 from app.config import settings
 from app.schemas import HealthOut
+from app.services import playlist_sync_revision as _playlist_sync_revision  # noqa: F401
 
 app = FastAPI(title="Music Service MVP", version="0.4.0")
 
@@ -42,7 +45,7 @@ async def redacted_validation_error(_: Request, exc: RequestValidationError):
 @app.middleware("http")
 async def private_api_no_store(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/api/"):
+    if request.url.path.startswith(("/api/", "/rest/")):
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Pragma"] = "no-cache"
     return response
@@ -55,6 +58,12 @@ def health():
 
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(auth_api.router, prefix="/api/auth", tags=["auth"])
+app.include_router(
+    player_credentials.router,
+    prefix="/api/player-credentials",
+    tags=["player-credentials"],
+)
+app.include_router(opensubsonic.router, prefix="/rest", tags=["opensubsonic"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])

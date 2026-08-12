@@ -1,6 +1,7 @@
 from celery import Celery
 
 from app.config import settings
+from app.services import playlist_sync_revision as _playlist_sync_revision  # noqa: F401
 
 celery = Celery(
     "music_service",

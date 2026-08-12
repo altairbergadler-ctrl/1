@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     auth_recovery_max_age_seconds: int = Field(default=15 * 60, ge=60, le=3600)
     auth_recovery_idle_seconds: int = Field(default=5 * 60, ge=60, le=1800)
     auth_cookie_secure: bool = False
+    opensubsonic_auth_touch_interval_seconds: int = Field(default=5 * 60, ge=30)
+    opensubsonic_failed_attempts: int = Field(default=10, ge=1, le=1000)
+    opensubsonic_failed_window_seconds: int = Field(default=5 * 60, ge=30)
+    opensubsonic_success_requests_per_minute: int = Field(default=1200, ge=60)
+    opensubsonic_artwork_cache_path: str = "/music/cache/artwork"
+    opensubsonic_artwork_cache_max_bytes: int = Field(
+        default=256 * 1024 * 1024, ge=16 * 1024 * 1024
+    )
+    opensubsonic_artwork_cache_ttl_seconds: int = Field(default=7 * 24 * 60 * 60, ge=3600)
+    opensubsonic_artwork_max_input_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    opensubsonic_artwork_max_pixels: int = Field(default=40_000_000, ge=1_000_000)
+    opensubsonic_artwork_max_output_pixels: int = Field(default=2048, ge=64, le=4096)
 
     google_login_client_id: str = ""
     google_login_client_secret_file: str = "/run/secrets/google_login_client_secret"

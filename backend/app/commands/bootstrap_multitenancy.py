@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from sqlalchemy import func, inspect, select, text
+from sqlalchemy.orm import load_only
 
 from app.db import SessionLocal
 from app.models import (
@@ -203,7 +204,16 @@ def migrate() -> dict[str, int]:
                 raise RuntimeError("Playlist source already belongs to another user")
             source.user_id = owner.id
 
-        playlists = list(db.scalars(select(Playlist)))
+        # At the explicit 0008 expand stop, later release columns do not exist
+        # yet. Load only the ownership fields needed by this backfill so the
+        # command remains forward-compatible with additive ORM columns.
+        playlists = list(
+            db.scalars(
+                select(Playlist).options(
+                    load_only(Playlist.id, Playlist.source_id, Playlist.user_id)
+                )
+            )
+        )
         for playlist in playlists:
             if playlist.user_id not in (None, owner.id):
                 raise RuntimeError("Playlist already belongs to another user")
