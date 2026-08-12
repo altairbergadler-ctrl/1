@@ -2,8 +2,10 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.api import acquisition
 from app.api import auth as auth_api
 from app.api import player_credentials
+from app.api import push
 from app.api import opensubsonic
 from app.api import (
     admin,
@@ -56,8 +58,10 @@ def health():
     return HealthOut(release_sha=settings.release_sha)
 
 
+app.include_router(acquisition.router, prefix="/api/acquisition", tags=["acquisition"])
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(auth_api.router, prefix="/api/auth", tags=["auth"])
+app.include_router(push.router, prefix="/api/push", tags=["push"])
 app.include_router(
     player_credentials.router,
     prefix="/api/player-credentials",

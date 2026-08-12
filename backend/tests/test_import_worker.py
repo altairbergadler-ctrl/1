@@ -1,5 +1,4 @@
 import json
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -40,7 +39,6 @@ def test_import_task_is_registered():
 def test_spotify_import_task_completes_job(session_factory, monkeypatch):
     job_id, source_id = _create_job_and_source(session_factory, ServiceEnum.spotify)
     calls: list[int] = []
-    matching_calls: list[tuple[int, int | None]] = []
     monkeypatch.setattr("app.workers.tasks.SessionLocal", session_factory)
     monkeypatch.setattr(
         "app.workers.tasks.import_spotify_playlists",
@@ -50,13 +48,6 @@ def test_spotify_import_task_completes_job(session_factory, monkeypatch):
             created=1,
             tracks_imported=2,
         ),
-    )
-    monkeypatch.setattr(
-        "app.workers.tasks.run_matching",
-        lambda _db, user_id, *, playlist_id: matching_calls.append(
-            (user_id, playlist_id)
-        )
-        or SimpleNamespace(to_dict=lambda: {"processed": 2}),
     )
 
     result = import_playlists_task.run(job_id, source_id)
@@ -69,8 +60,7 @@ def test_spotify_import_task_completes_job(session_factory, monkeypatch):
     assert job.finished_at is not None
     assert json.loads(job.payload)["service"] == "spotify"
     assert json.loads(job.payload)["import"]["tracks_imported"] == 2
-    assert json.loads(job.payload)["matching"] == {"processed": 2}
-    assert len(matching_calls) == 1
+    assert json.loads(job.payload)["acquisition_job_ids"] == []
     assert result["result_status"] == "completed"
     check.close()
 
@@ -135,19 +125,15 @@ def test_public_spotify_url_task_imports_then_matches_one_playlist(
         "app.workers.tasks.import_spotify_playlist_url",
         import_public_playlist,
     )
-    monkeypatch.setattr(
-        "app.workers.tasks.run_matching",
-        lambda _db, _user_id, *, playlist_id: calls.append(("matching", playlist_id))
-        or SimpleNamespace(to_dict=lambda: {"processed": 1}),
-    )
 
     result = import_playlists_task.run(job_id, source_id, None, url)
 
-    assert calls == [("import", url), ("matching", playlist_id)]
+    assert calls == [("import", url)]
     assert result["playlist_id"] == playlist_id
-    assert result["matching"] == {"processed": 1}
     check = session_factory()
     assert check.get(Job, job_id).status == JobStatus.done
+    acquisition = check.get(Job, result["acquisition_job_ids"][0])
+    assert acquisition.type == "acquisition_workflow"
     check.close()
 
 

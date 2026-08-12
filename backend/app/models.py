@@ -127,6 +127,9 @@ class User(Base):
     provider_credentials = relationship(
         "UserProviderCredential", back_populates="user", cascade="all, delete-orphan"
     )
+    push_subscriptions = relationship(
+        "PushSubscription", back_populates="user", cascade="all, delete-orphan"
+    )
     sources = relationship("PlaylistSource", back_populates="user")
     playlists = relationship(
         "Playlist", back_populates="user", overlaps="playlists,source"
@@ -417,6 +420,7 @@ class Job(Base):
     error = Column(Text)
     created_at = Column(DateTime, default=utcnow)
     heartbeat_at = Column(DateTime, default=utcnow, nullable=False)
+    next_run_at = Column(DateTime)
     pause_requested_at = Column(DateTime)
     paused_at = Column(DateTime)
     lock_owner = Column(String(64))
@@ -469,6 +473,17 @@ class Job(Base):
             ),
             sqlite_where=text(
                 "type = 'storage_migration' AND status IN ('pending', 'running')"
+            ),
+        ),
+        Index(
+            "uq_jobs_active_acquisition_playlist",
+            "playlist_id",
+            unique=True,
+            postgresql_where=text(
+                "type = 'acquisition_workflow' AND status IN ('pending', 'running')"
+            ),
+            sqlite_where=text(
+                "type = 'acquisition_workflow' AND status IN ('pending', 'running')"
             ),
         ),
     )
@@ -618,6 +633,31 @@ class StorageSecret(Base):
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
     validated_at = Column(DateTime)
     __table_args__ = (Index("ix_storage_secrets_account_id", "account_id"),)
+
+
+class PushSubscription(Base):
+    """One revocable browser subscription; endpoint material stays encrypted."""
+
+    __tablename__ = "push_subscriptions"
+    id = Column(String(36), primary_key=True, default=new_public_id)
+    user_id = Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    secret_id = Column(
+        ForeignKey("storage_secrets.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    endpoint_hash = Column(LargeBinary(32), nullable=False, unique=True)
+    user_agent_label = Column(String(128))
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    last_success_at = Column(DateTime)
+    failure_count = Column(Integer, nullable=False, default=0)
+    revoked_at = Column(DateTime)
+    user = relationship("User", back_populates="push_subscriptions")
+    secret = relationship("StorageSecret")
+    __table_args__ = (
+        Index("ix_push_subscriptions_user_active", "user_id", "revoked_at"),
+    )
 
 
 class StorageOAuthState(Base):

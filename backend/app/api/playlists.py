@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import require_auth, require_csrf
-from app.api.matching import _queue_matching_job
 from app.config import settings
 from app.db import get_db
 from app.models import (
@@ -34,6 +33,7 @@ from app.schemas import (
     PlaylistListOut,
     PlaylistUrlImportIn,
 )
+from app.services.acquisition_queue import queue_acquisition_job
 from app.services.user_credentials import has_user_credential
 from app.services.playlist_converter import (
     PlaylistConversionError,
@@ -120,6 +120,7 @@ def _active_job_covers_request(
     job: Job,
     playlist_id: int | None,
     url: str | None,
+    update_quality: bool,
 ) -> bool:
     try:
         payload = json.loads(job.payload or "{}")
@@ -129,6 +130,8 @@ def _active_job_covers_request(
         return False
     active_playlist_id = payload.get("playlist_id")
     active_url = payload.get("url")
+    if bool(payload.get("update_quality")) != bool(update_quality):
+        return False
     if url is not None:
         return active_url == url
     return active_url is None and (
@@ -142,10 +145,11 @@ def _reuse_active_job_or_raise(
     *,
     playlist_id: int | None,
     url: str | None,
+    update_quality: bool,
 ) -> Job:
     db.commit()
     db.refresh(active_job)
-    if _active_job_covers_request(active_job, playlist_id, url):
+    if _active_job_covers_request(active_job, playlist_id, url, update_quality):
         return active_job
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -163,6 +167,7 @@ def _queue_import_job(
     *,
     playlist_id: int | None = None,
     url: str | None = None,
+    update_quality: bool = False,
 ) -> Job:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(
@@ -211,9 +216,10 @@ def _queue_import_job(
             active_job,
             playlist_id=playlist_id,
             url=url,
+            update_quality=update_quality,
         )
 
-    payload = {"source_id": source_id}
+    payload = {"source_id": source_id, "update_quality": bool(update_quality)}
     if playlist_id is not None:
         payload["playlist_id"] = playlist_id
     if url is not None:
@@ -251,6 +257,7 @@ def _queue_import_job(
             active_job,
             playlist_id=playlist_id,
             url=url,
+            update_quality=update_quality,
         )
     db.refresh(job)
     try:
@@ -296,7 +303,12 @@ def import_playlists(
             status_code=422,
             detail="Manual playlists must be imported from content",
         )
-    return _queue_import_job(db, current_user.id, source.id)
+    return _queue_import_job(
+        db,
+        current_user.id,
+        source.id,
+        update_quality=payload.update_quality,
+    )
 
 
 @router.post(
@@ -327,7 +339,13 @@ def import_playlist_url(
             status_code=status.HTTP_409_CONFLICT,
             detail="Connect Spotify before importing a playlist",
         )
-    return _queue_import_job(db, current_user.id, source.id, url=url)
+    return _queue_import_job(
+        db,
+        current_user.id,
+        source.id,
+        url=url,
+        update_quality=payload.update_quality,
+    )
 
 
 @router.post(
@@ -349,7 +367,12 @@ def import_playlist_content(
             content=payload.content,
             converted=converted,
         )
-        matching_job = _queue_matching_job(db, current_user.id, playlist.id)
+        matching_job = queue_acquisition_job(
+            db,
+            user_id=current_user.id,
+            playlist_id=playlist.id,
+            update_quality=payload.update_quality,
+        )
     except PlaylistConversionError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -359,6 +382,7 @@ def import_playlist_content(
         "skipped": converted.skipped,
         "format": converted.format,
         "matching_job": matching_job,
+        "acquisition_job": matching_job,
     }
 
 

@@ -28,6 +28,36 @@ class CurrentUserOut(BaseModel):
     csrf_token: str
 
 
+class WebPushKeysIn(BaseModel):
+    p256dh: str = Field(min_length=32, max_length=512, pattern=r"^[A-Za-z0-9_-]+={0,2}$")
+    auth: str = Field(min_length=8, max_length=256, pattern=r"^[A-Za-z0-9_-]+={0,2}$")
+
+
+class WebPushSubscriptionIn(BaseModel):
+    endpoint: str = Field(min_length=16, max_length=4096)
+    expirationTime: int | None = Field(default=None, ge=0)
+    keys: WebPushKeysIn
+    user_agent_label: str | None = Field(default=None, max_length=128)
+
+
+class WebPushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=16, max_length=4096)
+
+
+class WebPushSubscriptionOut(BaseModel):
+    id: str
+    created_at: datetime
+    last_success_at: datetime | None = None
+    failure_count: int
+
+
+class WebPushStatusOut(BaseModel):
+    enabled: bool
+    configured: bool
+    public_key: str | None = None
+    subscriptions: list[WebPushSubscriptionOut]
+
+
 class UserAdminOut(BaseModel):
     id: int
     email: str | None
@@ -66,6 +96,7 @@ class JobOut(BaseModel):
     pause_requested_at: datetime | None = None
     paused_at: datetime | None = None
     heartbeat_at: datetime
+    next_run_at: datetime | None = None
     finished_at: datetime | None = None
 
     @field_validator("payload", mode="before")
@@ -113,6 +144,26 @@ class JobOut(BaseModel):
             "matching",
             "storage",
             "items",
+            "update_quality",
+            "total_positions",
+            "processed_positions",
+            "downloaded_files",
+            "drive_uploaded_files",
+            "local_evicted_files",
+            "current_stage",
+            "free_disk_bytes",
+            "providers",
+            "notification",
+            "acquisition_job_ids",
+            "batch_state",
+            "qobuz",
+            "yandex",
+            "checked",
+            "available",
+            "selected",
+            "sent",
+            "revoked",
+            "batch_pause_seconds",
             "status",
             "reason",
             "total",
@@ -165,6 +216,12 @@ class JobOut(BaseModel):
                         sanitized(entry, depth + 1)
                         for entry in item[:500]
                         if isinstance(entry, dict)
+                    ]
+                elif key == "acquisition_job_ids" and isinstance(item, list):
+                    result[key] = [
+                        int(entry)
+                        for entry in item[:500]
+                        if isinstance(entry, int) and entry > 0
                     ]
             return result
 
@@ -232,16 +289,19 @@ class SourceListOut(BaseModel):
 
 class PlaylistImportIn(BaseModel):
     source_id: int = Field(gt=0)
+    update_quality: bool = False
 
 
 class PlaylistUrlImportIn(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+    update_quality: bool = False
 
 
 class PlaylistContentImportIn(BaseModel):
     name: str = Field(min_length=1, max_length=512)
     content: str = Field(min_length=1, max_length=2_000_000)
     format: Literal["auto", "csv", "m3u", "text"] = "auto"
+    update_quality: bool = False
 
 
 class PlaylistContentImportOut(BaseModel):
@@ -250,6 +310,11 @@ class PlaylistContentImportOut(BaseModel):
     skipped: int
     format: str
     matching_job: JobOut
+    acquisition_job: JobOut
+
+
+class AcquisitionQueueIn(BaseModel):
+    update_quality: bool = False
 
 
 class PlaylistStatusSummaryOut(BaseModel):

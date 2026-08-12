@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     spotify_redirect_uri: str = ""
     spotify_oauth_state_ttl_seconds: int = Field(default=10 * 60, ge=60, le=3600)
 
+    # Standards-based Web Push. The private VAPID key is a Docker secret; the
+    # matching public key is derived at runtime and is safe to expose.
+    web_push_enabled: bool = False
+    web_push_vapid_private_key_file: str = "/run/secrets/web_push_vapid_private_key"
+    web_push_allowed_host_suffixes: str = (
+        "fcm.googleapis.com,push.services.mozilla.com,"
+        "updates.push.services.mozilla.com,web.push.apple.com,notify.windows.com"
+    )
+    web_push_vapid_subject: str = "mailto:admin@audiofeel.su"
+    web_push_ttl_seconds: int = Field(default=24 * 60 * 60, ge=60, le=28 * 24 * 60 * 60)
+    web_push_max_failures: int = Field(default=3, ge=1, le=20)
+
     yandex_token: str = ""
     provider_credential_key_file: str = "/run/secrets/provider_credential_key"
     qobuz_credential_key_file: str = "/run/secrets/qobuz_credential_key"
@@ -139,6 +151,13 @@ class Settings(BaseSettings):
     qobuz_embed_art: bool = True
     qobuz_sidecar_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     qobuz_sidecar_read_timeout_seconds: float = Field(default=15 * 60, ge=30, le=3600)
+
+    # Provider-neutral acquisition queue. One task handles one batch, while
+    # import/scan/Drive verification runs inside the inter-batch interval.
+    acquisition_enabled: bool = False
+    acquisition_batch_size: int = Field(default=25, ge=1, le=500)
+    acquisition_dispatch_interval_seconds: int = Field(default=15, ge=5, le=300)
+    acquisition_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=300)
 
     musicbrainz_enabled: bool = True
     musicbrainz_base_url: str = "https://musicbrainz.org/ws/2"

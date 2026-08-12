@@ -743,14 +743,22 @@ def replicate_imported_files(
 ) -> dict[str, int | str]:
     """Move newly imported files to Drive and evict verified local sources."""
 
+    requested_file_ids = {
+        int(value)
+        for value in import_report.get("file_ids", [])
+        if value is not None
+    }
     imported_paths = {
         str(Path(value).expanduser().resolve())
         for value in import_report.get("imported", [])
         if value
     }
+    target_count = (
+        len(requested_file_ids) if requested_file_ids else len(imported_paths)
+    )
     summary: dict[str, int | str] = {
         "status": "completed",
-        "total": len(imported_paths),
+        "total": target_count,
         "uploaded": 0,
         "already_remote": 0,
         "evicted": 0,
@@ -762,13 +770,22 @@ def replicate_imported_files(
     if settings.storage_primary_backend != "google_drive":
         summary["status"] = "local_primary"
         return summary
-    if not imported_paths:
+    if not requested_file_ids and not imported_paths:
         return summary
 
-    catalog_files = list(
-        db.scalars(select(LibraryFile).where(LibraryFile.path.in_(imported_paths)))
-    )
-    summary["missing_catalog"] = len(imported_paths) - len(catalog_files)
+    if requested_file_ids:
+        catalog_files = list(
+            db.scalars(
+                select(LibraryFile).where(LibraryFile.id.in_(requested_file_ids))
+            )
+        )
+    else:
+        catalog_files = list(
+            db.scalars(
+                select(LibraryFile).where(LibraryFile.path.in_(imported_paths))
+            )
+        )
+    summary["missing_catalog"] = target_count - len(catalog_files)
     for file in catalog_files:
         try:
             uploaded, eviction = move_catalog_file_to_drive(db, file)

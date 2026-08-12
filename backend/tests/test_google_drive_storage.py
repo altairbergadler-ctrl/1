@@ -39,6 +39,7 @@ from app.services.storage import (
     health_check_account,
     migrate_local_library,
     move_catalog_file_to_drive,
+    replicate_imported_files,
     placement_accounts,
     upload_catalog_file,
 )
@@ -614,3 +615,26 @@ def test_rejected_refresh_token_is_classified_as_expired(monkeypatch):
 
     with pytest.raises(GoogleDriveAuthError):
         client.about()
+
+
+def test_replication_recovery_uses_file_id_after_local_eviction(
+    db, tmp_path, monkeypatch
+):
+    source = tmp_path / "recovered.flac"
+    source.write_bytes(b"already-on-drive")
+    file = _add_catalog_file(db, source)
+    file.path = None
+    db.commit()
+    monkeypatch.setattr(
+        "app.services.storage.settings.storage_primary_backend",
+        "google_drive",
+    )
+    monkeypatch.setattr(
+        "app.services.storage.move_catalog_file_to_drive",
+        lambda _db, _file: (False, "already_evicted"),
+    )
+    summary = replicate_imported_files(db, {"file_ids": [file.id]})
+    assert summary["status"] == "completed"
+    assert summary["already_remote"] == 1
+    assert summary["already_evicted"] == 1
+    assert summary["missing_catalog"] == 0

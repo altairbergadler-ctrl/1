@@ -64,11 +64,6 @@ def test_converter_rejects_content_without_artist_and_title(content):
 def test_content_import_creates_manual_playlist_and_queues_matching(
     api_client, auth_headers, db, monkeypatch
 ):
-    queued = []
-    monkeypatch.setattr(
-        "app.api.matching.run_matching_task.delay",
-        lambda *args: queued.append(args),
-    )
 
     response = api_client.post(
         "/api/playlists/import-content",
@@ -95,6 +90,7 @@ def test_content_import_creates_manual_playlist_and_queues_matching(
         )
     )
     job = db.get(Job, payload["matching_job"]["id"])
+    assert payload["acquisition_job"]["id"] == payload["matching_job"]["id"]
     assert source.service == ServiceEnum.manual
     assert playlist.track_count == 2
     assert playlist.external_id.startswith("manual:")
@@ -102,8 +98,8 @@ def test_content_import_creates_manual_playlist_and_queues_matching(
         ("Artist One", "First Song"),
         ("Artist Two", "Second Song"),
     ]
-    assert json.loads(job.payload) == {"playlist_id": playlist.id}
-    assert queued == [(job.id, playlist.user_id, playlist.id)]
+    assert job.type == "acquisition_workflow"
+    assert json.loads(job.payload)["update_quality"] is False
 
 
 def test_manual_source_is_connected_but_cannot_run_provider_import(

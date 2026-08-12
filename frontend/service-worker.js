@@ -1,4 +1,4 @@
-const CACHE_NAME = "lossless-archive-v17";
+const CACHE_NAME = "lossless-archive-v18";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -49,5 +49,40 @@ self.addEventListener("fetch", (event) => {
       caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
       return response;
     }).catch(() => caches.match(request)),
+  );
+});
+
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+  let payload;
+  try {
+    payload = event.data.json();
+  } catch {
+    return;
+  }
+  if (payload?.type !== "workflow_completed") return;
+  event.waitUntil(
+    self.registration.showNotification(payload.title || "Music Service", {
+      body: payload.body || "Все пачки завершены",
+      tag: payload.tag || "workflow-completed",
+      data: { url: payload.url || "/#/playlists" },
+      icon: "/icon.svg",
+      badge: "/icon.svg",
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || "/#/playlists", self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      const existing = clients.find((client) => new URL(client.url).origin === self.location.origin);
+      if (existing) {
+        existing.navigate(target);
+        return existing.focus();
+      }
+      return self.clients.openWindow(target);
+    }),
   );
 });

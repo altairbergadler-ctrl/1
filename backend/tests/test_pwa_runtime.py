@@ -124,7 +124,8 @@ def test_playlist_page_imports_csv_m3u_or_text_without_provider_auth():
     assert 'id="playlist-converter-form"' in app_script
     assert ".csv,.m3u,.m3u8,.txt" in app_script
     assert 'api("/api/playlists/import-content"' in app_script
-    assert "imported.matching_job.id" in app_script
+    assert "await waitForJob(imported.matching_job.id" not in app_script
+    assert "Автоматическая загрузка поставлена в очередь" in app_script
     assert "Исполнитель — Название трека" in app_script
 
 
@@ -224,3 +225,19 @@ def test_opensubsonic_query_secrets_are_excluded_from_access_logs():
     assert "--no-access-log" in compose
     assert "access_log off;" in nginx
     assert "output discard" in caddy
+
+
+def test_pwa_push_only_handles_final_workflow_completion():
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    app_script = (root / "app.js").read_text(encoding="utf-8")
+    service_worker = (root / "service-worker.js").read_text(encoding="utf-8")
+    manifest = (root / "manifest.webmanifest").read_text(encoding="utf-8")
+
+    assert 'href="#/notifications"' in app_script
+    assert "\nfunction base64UrlToBytes" in app_script
+    assert "\nfunction acquisitionProgressPanel" in app_script
+    assert 'Notification.requestPermission()' in app_script
+    assert 'api("/api/push/subscriptions"' in app_script
+    assert 'payload?.type !== "workflow_completed"' in service_worker
+    assert 'self.addEventListener("notificationclick"' in service_worker
+    assert '"id": "/"' in manifest

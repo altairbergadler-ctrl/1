@@ -41,6 +41,19 @@ ensure_key "${SECRET_ROOT}/auth.key" root:root
 if [[ ! -e "${SECRET_ROOT}/google-login-client-secret" ]]; then
   install -m 0400 /dev/null "${SECRET_ROOT}/google-login-client-secret"
 fi
+ensure_vapid_key() {
+  local path=$1
+  if [[ ! -s "${path}" ]]; then
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+      -out "${path}"
+  fi
+  openssl pkey -in "${path}" -check -noout >/dev/null
+  chown root:root "${path}"
+  chmod 0400 "${path}"
+}
+
+ensure_vapid_key "${SECRET_ROOT}/web-push-vapid-private.pem"
+
 chown root:root "${SECRET_ROOT}/google-login-client-secret"
 chmod 0400 "${SECRET_ROOT}/google-login-client-secret"
 
@@ -101,6 +114,15 @@ if [[ ! -e "${ENV_FILE}" ]]; then
     printf 'FRONTEND_HOST_PORT=18080\n'
   } >"${ENV_FILE}"
   chmod 0600 "${ENV_FILE}"
+    printf 'ACQUISITION_ENABLED=true\n'
+    printf 'ACQUISITION_BATCH_SIZE=25\n'
+    printf 'ACQUISITION_DISPATCH_INTERVAL_SECONDS=15\n'
+    printf 'ACQUISITION_JOB_STALE_SECONDS=21600\n'
+    printf 'WEB_PUSH_ENABLED=true\n'
+    printf 'WEB_PUSH_VAPID_PRIVATE_KEY_HOST_FILE=%s\n' \
+      "${SECRET_ROOT}/web-push-vapid-private.pem"
+    printf 'WEB_PUSH_VAPID_SUBJECT=mailto:admin@audiofeel.su\n'
+    printf 'WEB_PUSH_TTL_SECONDS=86400\n'
 
   unset postgres_password app_auth_token qobuz_internal_token yandex_internal_token
 fi
@@ -140,3 +162,14 @@ ensure_env_default GOOGLE_LOGIN_MAX_TOKEN_AGE_SECONDS 600
 chmod 0600 "${ENV_FILE}"
 
 printf 'audiofeel runtime: ready (credentials not displayed)\n'
+ensure_env_default ACQUISITION_ENABLED true
+ensure_env_default ACQUISITION_BATCH_SIZE 25
+ensure_env_default ACQUISITION_DISPATCH_INTERVAL_SECONDS 15
+ensure_env_default ACQUISITION_JOB_STALE_SECONDS 21600
+ensure_env_default WEB_PUSH_ENABLED true
+ensure_env_default WEB_PUSH_VAPID_PRIVATE_KEY_HOST_FILE \
+  "${SECRET_ROOT}/web-push-vapid-private.pem"
+ensure_env_default WEB_PUSH_VAPID_SUBJECT mailto:admin@audiofeel.su
+ensure_env_default WEB_PUSH_TTL_SECONDS 86400
+ensure_env_default WEB_PUSH_ALLOWED_HOST_SUFFIXES \
+  fcm.googleapis.com,push.services.mozilla.com,updates.push.services.mozilla.com,web.push.apple.com,notify.windows.com

@@ -2,6 +2,7 @@
   "name": "Lossless Archive",
   "short_name": "Lossless",
   "description": "Bit-perfect доступ к локальной lossless-библиотеке и плейлистам.",
+  "id": "/",
   "lang": "ru",
   "start_url": "/#/playlists",
   "scope": "/",

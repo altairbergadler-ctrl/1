@@ -96,7 +96,8 @@ docker compose \
   run --rm --no-deps migrate sh -lc 'alembic current; alembic heads'
 ```
 
-Обе команды должны показать `0009_google_user_auth_contract`. Сам сервис
+Для текущего релиза обе команды должны показать
+`0012_web_push_subscriptions`. Сам сервис
 `migrate` запускает `app.commands.migrate_database`: сначала expand, затем
 credential/ownership backfill, после него contract.
 
@@ -180,6 +181,30 @@ bootstrap owner. После успешного Google-входа recovery ост
 `docs/google-user-auth.md`.
 
 ## Исторический двухаккаунтный production gate
+
+## Acquisition queue и Web Push
+
+До запуска релиза создать отдельный VAPID P-256 key, не выводя его содержимое:
+
+```bash
+install -d -m 0700 /etc/audiofeel/secrets
+test -s /etc/audiofeel/secrets/web-push-vapid-private.pem || \
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+    -out /etc/audiofeel/secrets/web-push-vapid-private.pem
+chmod 0400 /etc/audiofeel/secrets/web-push-vapid-private.pem
+```
+
+В защищённом `/etc/audiofeel/music-service.env` задаются
+`ACQUISITION_ENABLED=true`, batch size/dispatcher interval,
+`WEB_PUSH_ENABLED=true`, host path ключа и VAPID subject. Значения env и
+private key в журнал не выводятся. Проверка Compose выполняется через
+`docker compose ... config -q`.
+
+Worker должен слушать очереди `celery,acquisition`, а beat периодически
+запускать `acquisition_dispatch`. Фактическая отправка Push возможна только
+после того, как пользователь разрешит уведомления в PWA. Отдельное
+Google/Firebase приложение не нужно. Полный gate:
+`docs/acquisition-workflow.md`.
 
 ## OpenSubsonic deployment gate
 

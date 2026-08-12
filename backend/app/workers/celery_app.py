@@ -24,7 +24,14 @@ celery.conf.update(
         "visibility_timeout": settings.celery_visibility_timeout_seconds,
     },
     visibility_timeout=settings.celery_visibility_timeout_seconds,
+    task_routes={
+        "acquisition_batch": {"queue": "acquisition"},
+    },
     beat_schedule={
+        "acquisition-dispatch": {
+            "task": "acquisition_dispatch",
+            "schedule": settings.acquisition_dispatch_interval_seconds,
+        },
         "qobuz-provider-health": {
             "task": "provider_health_check",
             "schedule": settings.provider_health_interval_seconds,
