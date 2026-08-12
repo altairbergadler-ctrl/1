@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     qobuz_max_tracks_per_run: int = Field(default=25, ge=1, le=500)
     qobuz_request_delay_seconds: float = Field(default=1.0, ge=0)
     qobuz_batch_delay_seconds: float = Field(default=30.0, ge=0, le=3600)
+    # Never start another Qobuz batch when the filesystem has less headroom.
+    # Every completed batch is drained to durable storage before rechecking it.
+    qobuz_min_free_bytes: int = Field(
+        default=5 * 1024 * 1024 * 1024, ge=512 * 1024 * 1024
+    )
     # Stale timeout remains a second line of defence after the sidecar's
     # mandatory connect/read timeouts.
     qobuz_download_job_stale_seconds: int = Field(default=6 * 60 * 60, ge=60)

@@ -133,7 +133,7 @@ def test_expand_backfill_contract_is_idempotent_and_losslessly_reversible(tmp_pa
     assert '"status":"already_current"' in second.stdout
 
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_open_subsonic_players"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0011_qobuz_pause_control"
         assert connection.scalar(text("SELECT count(*) FROM player_credentials")) == 0
         assert connection.scalar(
             text("SELECT count(*) FROM playlists WHERE opensubsonic_id IS NULL")
@@ -233,7 +233,7 @@ def test_post_contract_release_upgrades_without_replaying_ownership_backfill(tmp
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0010_open_subsonic_players"
+            "0011_qobuz_pause_control"
         )
         assert connection.scalar(text("SELECT count(*) FROM player_credentials")) == 0
         assert connection.scalar(

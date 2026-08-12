@@ -60,3 +60,30 @@ docker compose exec -T qobuz-sidecar python -m unittest -v test_app.py
 catalog search, CDN-загрузка, перенос в пользовательскую library и повторный
 matching подтверждены. Секреты остаются только в runtime sidecar и ignored
 локальной конфигурации.
+
+## Emergency disk-safety iteration — 2026-08-12
+
+Причина: большой fetch-missing run достиг 92% использования системного диска.
+Worker был остановлен до исчерпания места. Из checkpoint job импортированы,
+просканированы и подтверждённо реплицированы 350 файлов (13.48 GB); после
+verified remote upload локальные catalog bytes удалены. Использование диска
+снизилось до 60%, свободное место выросло с 3.5 до 16 GB. Job сохранена как
+pending и не перезапускается до развёртывания безопасного pipeline.
+
+Реализовано:
+
+- cooperative pause/resume одной и той же job на межпакетной границе;
+- import → scan → durable replication → verified eviction → matching после
+  каждой пачки, до следующего provider download;
+- автоматическая пауза до первой и каждой следующей пачки при запасе ниже
+  `QOBUZ_MIN_FREE_BYTES` (default 5 GiB);
+- PWA controls «Пауза после пачки» / «Продолжить» и persisted paused state;
+- Alembic `0011_qobuz_pause_control`, включая PostgreSQL
+  upgrade → downgrade to 0010 → upgrade acceptance.
+
+Pre-deploy acceptance:
+
+- focused Qobuz/PWA/migration: **52 passed, 5 skipped**;
+- full backend suite: **333 passed, 5 skipped**;
+- legacy expand/backfill/contract migration: **3 passed**;
+- `git diff --check`, Python compile и JavaScript syntax checks: PASS.

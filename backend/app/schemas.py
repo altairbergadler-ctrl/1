@@ -63,6 +63,8 @@ class JobOut(BaseModel):
     payload: dict | None = None
     error: str | None = None
     created_at: datetime
+    pause_requested_at: datetime | None = None
+    paused_at: datetime | None = None
     heartbeat_at: datetime
     finished_at: datetime | None = None
 

@@ -417,6 +417,8 @@ class Job(Base):
     error = Column(Text)
     created_at = Column(DateTime, default=utcnow)
     heartbeat_at = Column(DateTime, default=utcnow, nullable=False)
+    pause_requested_at = Column(DateTime)
+    paused_at = Column(DateTime)
     lock_owner = Column(String(64))
     finished_at = Column(DateTime)
     __table_args__ = (

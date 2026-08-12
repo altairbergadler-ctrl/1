@@ -248,6 +248,21 @@ match на общий `Track/File`. Чужой item, playlist или album во�
 
 ## 9. Сквозной сценарий (end-to-end flow)
 
+### Безопасная пакетная докачка Qobuz
+
+1. Worker проверяет свободное место до первой пачки; при запасе ниже
+   `QOBUZ_MIN_FREE_BYTES` job становится paused без обращения к provider.
+2. Пачка до 25 треков проходит search/download только в staging.
+3. На границе пачки verified audio переносится в library, каталог сканируется,
+   а терминальные результаты записываются в `provider_attempts`.
+4. Новые catalog files реплицируются в durable storage. Локальные байты
+   удаляются только после подтверждения удалённого объекта.
+5. Выполняется matching, повторно проверяется свободное место и запрос ручной
+   паузы. Только после этого разрешена следующая пачка.
+6. Pause сохраняет ту же job как pending + `paused_at`. Resume снимает
+   флаг и заново вычисляет eligibility: terminal fingerprints исключаются,
+   поэтому обработка продолжается с остатка, а не с начала.
+
 ### OpenSubsonic delivery flow
 
 1. Активный пользователь создаёт отдельный device key через Google-session + CSRF.

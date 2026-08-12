@@ -42,7 +42,7 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v16";' in service_worker
+    assert 'const CACHE_NAME = "lossless-archive-v17";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
 
@@ -81,6 +81,17 @@ def test_playlist_page_connects_spotify_before_importing_one_url():
     assert "window.location.assign(result.authorization_url)" in app_script
     assert "Client ID, Client Secret и пароль вводить в Audiofeel не нужно" in app_script
     assert ".playlist-import-card" in styles
+
+
+def test_qobuz_progress_has_safe_pause_and_resume_controls():
+    app_script = (
+        Path(__file__).resolve().parents[2] / "frontend" / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'data-action="qobuz-pause"' in app_script
+    assert 'data-action="qobuz-resume"' in app_script
+    assert "/api/qobuz/downloads/" in app_script
+    assert "Пауза после пачки" in app_script
 
 
 def test_pwa_uses_public_google_registration_and_role_admin():

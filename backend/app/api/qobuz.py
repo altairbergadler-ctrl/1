@@ -169,6 +169,94 @@ def qobuz_download_status(
     )
 
 
+@router.post("/downloads/{job_id}/pause", response_model=JobOut)
+def pause_qobuz_download(
+    job_id: int,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Request a safe pause after the current batch is stored in Drive."""
+
+    job = db.scalar(
+        select(Job).where(
+            Job.id == job_id,
+            Job.type == "qobuz_download",
+            Job.user_id == current_user.id,
+        )
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Qobuz job not found")
+    if job.status in (JobStatus.done, JobStatus.failed):
+        raise HTTPException(status_code=409, detail="Qobuz job is already finished")
+    now = utcnow()
+    if job.status == JobStatus.pending and job.lock_owner is None:
+        job.paused_at = now
+        job.pause_requested_at = None
+        job.error = None
+    elif job.paused_at is None:
+        job.pause_requested_at = now
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.post("/downloads/{job_id}/resume", response_model=JobOut)
+def resume_qobuz_download(
+    job_id: int,
+    current_user: User = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Resume a cooperatively paused job from its persisted provider ledger."""
+
+    job = db.scalar(
+        select(Job).where(
+            Job.id == job_id,
+            Job.type == "qobuz_download",
+            Job.user_id == current_user.id,
+        )
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Qobuz job not found")
+    if job.paused_at is None:
+        if job.pause_requested_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Qobuz is still draining the current batch",
+            )
+        raise HTTPException(status_code=409, detail="Qobuz job is not paused")
+    try:
+        payload = json.loads(job.payload or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=409, detail="Qobuz job cannot be resumed"
+        ) from exc
+    mode = payload.get("mode")
+    playlist_id = payload.get("playlist_id")
+    url = payload.get("url")
+    if mode not in {"fetch_missing", "url"}:
+        raise HTTPException(status_code=409, detail="Qobuz job cannot be resumed")
+    job.status = JobStatus.pending
+    job.pause_requested_at = None
+    job.paused_at = None
+    job.error = None
+    job.finished_at = None
+    job.heartbeat_at = utcnow()
+    job.lock_owner = None
+    db.commit()
+    db.refresh(job)
+    try:
+        qobuz_download_task.delay(job.id, mode, playlist_id, url)
+    except Exception as exc:
+        job.paused_at = utcnow()
+        job.error = f"Could not resume Qobuz job ({type(exc).__name__})"
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="Qobuz download queue is unavailable",
+        ) from exc
+    return job
+
+
 @router.get(
     "/download-eligibility/{playlist_id}",
     response_model=QobuzDownloadEligibilityOut,

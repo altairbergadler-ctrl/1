@@ -219,7 +219,20 @@ def migrate() -> dict[str, int]:
                 raise RuntimeError("Playlist already belongs to another user")
             playlist.user_id = owner.id
 
-        jobs = list(db.scalars(select(Job)))
+        jobs = list(
+            db.scalars(
+                select(Job).options(
+                    load_only(
+                        Job.id,
+                        Job.type,
+                        Job.payload,
+                        Job.scope,
+                        Job.user_id,
+                        Job.playlist_id,
+                    )
+                )
+            )
+        )
         for job in jobs:
             if job.type in SYSTEM_JOB_TYPES:
                 job.scope = JobScope.system
