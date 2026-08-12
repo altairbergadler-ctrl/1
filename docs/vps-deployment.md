@@ -177,3 +177,17 @@ bootstrap owner. После успешного Google-входа recovery ост
 
 Полный Console/setup/session/CSRF/ownership и двухаккаунтный acceptance runbook:
 `docs/google-user-auth.md`.
+
+## Проверенный двухаккаунтный production gate
+
+На 2026-08-12 в production выполнен полный runbook: test-user allowlist,
+неприглашённый `403` без DB side effects, owner invitation, first-login binding,
+двусторонние IDOR-пробы, shared-File Range delivery, независимый Spotify vault,
+disable/revoke и повторный `403`. Drive account после проверки остался enabled
+и healthy. В логах не найдено exact/generic email, unredacted OAuth query values
+или session-cookie values.
+
+После появления второго identity schema downgrade больше не применяется:
+rollback выполняется только через остановку writes, предыдущий release SHA и
+проверенный pre-migration PostgreSQL dump. Acceptance-user после проверки
+оставлен `disabled`, его sessions отозваны.

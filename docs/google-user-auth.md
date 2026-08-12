@@ -287,8 +287,15 @@ library/Drive objects и автоматическое удаление user data
 14. полный Docker pytest и live-PWA проходят;
 15. local SHA, GitHub branch SHA и deployed release SHA совпадают.
 
-Production snapshot 2026-08-12: пункты 1–4, 10–15 для bootstrap owner
-проверены, включая реальный Google callback, backup restore-test, logout,
-recovery revoke, независимый Drive account, health/Celery и log leak scan.
-Пункты 5–9 и disable второго пользователя ожидают второй реальный Google
-account; одна browser-сессия не считается двухаккаунтной приёмкой.
+Production snapshot 2026-08-12: все пункты 1–15 проверены с двумя реальными
+Google identity. До invitation второй account получил нейтральный HTTP `403`
+без создания user/session; после invitation его подтверждённый identity был
+связан с pending user по стабильному `sub`. Двусторонние A/B-пробы вернули
+`404` для чужих playlist/item/job/download ID, manual import остался личным,
+а один общий `File` выдан обоим через разные READY grants без изменения files
+count. Второй Spotify OAuth создал отдельную user credential и не изменил
+owner envelope. Disable отозвал живую session немедленно (`/api/auth/me` стал
+`401`), а повторный Google login отключённого пользователя вернул нейтральный
+`403`. Drive account остался healthy и отдельным от Login OAuth. Exact и
+generic leak scans после обоих flows дали 0 для email, credentials, OAuth
+query values и session cookies.

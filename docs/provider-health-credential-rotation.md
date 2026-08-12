@@ -115,3 +115,11 @@ Google Login client secret и `auth.key` не входят ни в один prov
   изменился;
 - PWA desktop/mobile: экран и формы видимы, три поля имеют `type=password`,
   `autocomplete=off`, пустые values, console errors = `0`.
+
+## Production-проверка user-owned Spotify vault 2026-08-12
+
+После реального Spotify OAuth второго Google-пользователя в vault существуют
+две раздельные `(user_id, spotify)` строки. Fingerprint существующего encrypted
+owner envelope до и после callback совпал, а новая credential и source
+принадлежат только второму user. Ни ciphertext, ни OAuth token, ни email при
+проверке не выводились; exact/generic log scan дал 0 совпадений.

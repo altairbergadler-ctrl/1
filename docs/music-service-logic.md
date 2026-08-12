@@ -70,6 +70,12 @@
 - `APP_AUTH_TOKEN` изолирован в краткоживущем bootstrap/recovery контуре.
 - Google Login и Google Drive используют разные OAuth clients/callbacks.
 
+Production-инварианты подтверждены 2026-08-12 двумя реальными identity:
+неприглашённый login не создаёт user, чужие ID отвечают `404`, две личные READY
+записи могут ссылаться на один физический `File`, а disable немедленно отзывает
+все sessions пользователя. Подробные безопасные доказательства — в
+`docs/music-service-handoff.md`.
+
 ---
 
 ## 3. Модуль 1: Парсер торрент-ссылок (Tracker Scraper)

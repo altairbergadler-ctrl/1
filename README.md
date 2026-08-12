@@ -171,6 +171,13 @@ Google login использует отдельный OAuth/OIDC client и callba
 Полная схема, endpoint matrix и production runbook —
 [`docs/google-user-auth.md`](docs/google-user-auth.md).
 
+Двухаккаунтная production-приёмка завершена 2026-08-12: invitation-only first
+login, no-auto-registration `403`, двусторонний cross-user `404`, общий
+дедуплицированный `File`, раздельные Spotify credentials и немедленный
+session revoke при disable проверены на реальных Google identity. Безопасные
+доказательства и итоговое состояние записаны в
+[`docs/music-service-handoff.md`](docs/music-service-handoff.md).
+
 ## Qobuz
 
 Докачка отсутствующих (`MISSING`) треков из каталога Qobuz. Неофициальная

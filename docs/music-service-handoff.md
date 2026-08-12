@@ -1,9 +1,10 @@
 # Music Service MVP: handoff для новых чатов
 
 Актуально на: 2026-08-12
-Статус: Google Sign-In/multi-user реализованы, развёрнуты и прошли локальный
-security gate и реальный production owner flow. Для полного закрытия итерации
-нужен второй реальный Google account: в доступной browser-сессии сейчас один.
+Статус: Google Sign-In/multi-user реализованы, развёрнуты и полностью приняты
+в production с двумя реальными Google identity. Кодовый production gate пройден
+на `aca44956ac111424f60cab5f21e11959e6fa57f9`; этот handoff фиксирует результаты
+финальной двухаккаунтной проверки.
 Предыдущая production-опора до этой миграции:
 `22ea6ee592d9e8f314129fadf79ce276ed57f603`.
 
@@ -115,23 +116,38 @@ hot rotation без restart.
   `/api/auth/google/callback`; существующий Drive client и storage account не
   изменены, Google consent не содержит Drive scopes;
 - реальный bootstrap owner прошёл invitation binding и повторный вход по тому
-  же `google_sub`; users count остался 1;
+  же `google_sub`; повторные входы не создают дубликаты;
+- до invitation второй test-user получил нейтральный HTTP `403`: users count
+  остался 1, pending users и live sessions не появились;
+- после owner invitation pending-запись имела `google_sub IS NULL`; первый
+  успешный вход активировал её и связал второй уникальный `google_sub`;
+- роль `user` не получила owner-навигацию; owner-only admin/provider/storage
+  endpoints вернули `403`;
+- A/B-пробы playlist/items/jobs/download в обе стороны: свои объекты отвечают
+  `200`, существующие чужие ID — `404`; списки sources содержат только свои
+  записи;
+- manual-import второго пользователя создал его собственные source, playlist,
+  item и matching job; READY grant у обоих пользователей указывает на тот же
+  `Track`/`File`, Range-download обоим вернул `206`, files count остался 16;
+- второй Spotify OAuth создал отдельную `(user_id, spotify)` credential; число
+  Spotify owners стало 2, а encrypted owner-запись не изменилась;
+- disable второго пользователя отозвал все его sessions; уже выданная cookie
+  сразу получила `401`, повторный Google login — нейтральный `403` без email;
 - Google `at_hash` проверяется с access token только в памяти; access/ID token
   не сохраняются и не возвращаются;
 - logout и owner recovery revoke немедленно оставили 0 live sessions;
   session и CSRF hashes в PostgreSQL имеют фиксированную длину 32 bytes;
-- exact-value scan Caddy/backend/frontend logs после OAuth flow: 0 совпадений
-  с email, OAuth code/state, Login client credentials; query filter Caddy
-  включён;
+- exact-value scan Caddy/backend/frontend logs после обоих OAuth flows: 0
+  совпадений с email, OAuth code/state, Login client credentials; generic email,
+  unredacted OAuth query и session-cookie matches также равны 0;
 - backend/frontend/PostgreSQL/Redis/sidecars healthy, worker/beat running,
   Celery `pong`, Alembic `0009`, production live-PWA `9 passed`.
 
-Остаются непроверенными только сценарии, для которых физически нужен второй
-Google identity: uninvited `403` до invitation, second-user first login,
-A/B IDOR/download grants, общий `File` для двух users, независимый второй
-Spotify OAuth credential и disable чужого пользователя. Их unit/integration
-coverage зелёный, но это не заменяет обязательную двухаккаунтную production-
-приёмку.
+Google Sign-In/multi-user gate закрыт полностью. После проверки второй
+acceptance-user намеренно оставлен в состоянии `disabled`, его sessions
+отозваны; owner остаётся `active`. Acceptance-артефакты добавили один manual
+source, playlist, item и job, но не изменили число `File`, SHA-1 или Drive
+locations.
 
 Команда полного локального теста с live-PWA:
 
