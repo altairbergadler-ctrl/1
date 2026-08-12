@@ -2,8 +2,8 @@
 
 Status: implementation and production deployment completed on 2026-08-12.
 Real-phone acceptance is in progress: a real player credential and Symfonium
-provider exist, compatibility gate `5d3b6b2` is deployed, and initial sync must
-now be repeated on the phone.
+provider exist, compatibility gates `5d3b6b2` and `a6b885b` are deployed, and
+initial sync must now be repeated on the phone.
 
 ## Boundaries
 
@@ -45,9 +45,10 @@ password and token/salt authentication are rejected. A foreign public ID and an
 unknown public ID have the same protocol result.
 
 The server advertises Subsonic API 1.16.1, accepts 1.13.x through 1.16.x, supports
-empty and independently paged `search3`, preserves playlist order and duplicates,
-marks every playlist `readonly`, and returns only original bytes with Range and
-HEAD support. Metadata and binary delivery use the same local/Drive source resolver.
+empty and independently paged `search3`, including Symfonium's literal
+`query=""` wildcard, preserves playlist order and duplicates, marks every
+playlist `readonly`, and returns only original bytes with Range and HEAD support.
+Metadata and binary delivery use the same local/Drive source resolver.
 
 The operator-facing Symfonium setup and initial/add/remove/offline acceptance
 sequence is documented in `player-sync-symfonium.md`. The server-side production

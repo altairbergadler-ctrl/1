@@ -361,8 +361,10 @@ Production migration до `0010_open_subsonic_players` и публичный `/r
 deployment завершены 2026-08-12. Реальный player credential создан, Symfonium
 14.1.0 установлен и provider добавлен. Первая sync выявила необходимость пустых
 `getStarred2`, `getBookmarks` и `getGenres`; исправление находится в code gate
-`5d3b6b2` и развёрнуто в production. Следующий шаг phone acceptance — повторная
-initial sync.
+`5d3b6b2` и развёрнуто в production. Следующая sync завершилась успешно, но дала
+`0` треков, поскольку Symfonium использует специальный `search3 query=""` для
+полного обхода. Нормализация этого запроса развёрнута в code gate `a6b885b`;
+следующий шаг phone acceptance — ещё одна initial sync.
 
 - `backend/app/api/` — роутеры API, включая matching/download/auth/qobuz
 - `backend/app/opensubsonic/` — API-key auth, scoped catalog, protocol и artwork
