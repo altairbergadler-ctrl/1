@@ -4,6 +4,7 @@ import hashlib
 import logging
 from datetime import timedelta
 from io import BytesIO
+from xml.etree.ElementTree import fromstring
 
 from PIL import Image
 from sqlalchemy import select
@@ -267,16 +268,49 @@ def test_all_foreign_and_missing_ids_are_indistinguishable(
         ]["error"]
 
 
-def test_ping_and_license_do_not_load_catalog(api_client, db, tmp_path, monkeypatch):
+def test_system_and_empty_sync_endpoints_do_not_load_catalog(
+    api_client, db, tmp_path, monkeypatch
+):
     _user, key, *_ = _seed(db, tmp_path)
 
     def fail_catalog(*_args, **_kwargs):
         raise AssertionError("system endpoint loaded the catalog")
 
     monkeypatch.setattr("app.api.opensubsonic.visible_tracks", fail_catalog)
-    for method in ("ping", "getLicense", "getMusicFolders"):
+    for method in (
+        "ping",
+        "getLicense",
+        "getMusicFolders",
+        "getStarred2",
+        "getBookmarks",
+        "getGenres",
+    ):
         response = api_client.get(f"/rest/{method}", params=_params(key))
         assert response.json()["subsonic-response"]["status"] == "ok"
+
+
+def test_symfonium_supplemental_sync_collections_are_empty_json_and_xml(
+    api_client, db, tmp_path
+):
+    _user, key, *_ = _seed(db, tmp_path)
+    cases = (
+        ("getStarred2", "starred2", {"artist": [], "album": [], "song": []}),
+        ("getBookmarks", "bookmarks", {"bookmark": []}),
+        ("getGenres", "genres", {"genre": []}),
+    )
+
+    namespace = "{http://subsonic.org/restapi}"
+    for method, collection, expected in cases:
+        json_response = api_client.get(f"/rest/{method}.view", params=_params(key))
+        assert json_response.status_code == 200
+        assert json_response.json()["subsonic-response"][collection] == expected
+
+        xml_response = api_client.get(
+            f"/rest/{method}.view",
+            params={"apiKey": key, "v": "1.16.1", "c": "symfonium-test"},
+        )
+        assert xml_response.status_code == 200
+        assert fromstring(xml_response.content).find(f"{namespace}{collection}") is not None
 
 
 def test_album_list_requires_and_honors_supported_type(api_client, db, tmp_path, monkeypatch):

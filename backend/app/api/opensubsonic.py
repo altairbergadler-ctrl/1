@@ -99,6 +99,12 @@ def _catalog_response(method: str, request: Request, db: Session, user_id: int) 
         return payload(
             {"musicFolders": {"musicFolder": [{"id": "mf:audiofeel", "name": "Audiofeel"}]}}
         )
+    if method == "getStarred2":
+        return payload({"starred2": {"artist": [], "album": [], "song": []}})
+    if method == "getBookmarks":
+        return payload({"bookmarks": {"bookmark": []}})
+    if method == "getGenres":
+        return payload({"genres": {"genre": []}})
     tracks = visible_tracks(db, user_id)
     albums = _albums_for_tracks(tracks)
     artists: dict[int, tuple[object, list[Album]]] = {}
