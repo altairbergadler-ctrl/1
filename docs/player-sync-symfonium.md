@@ -10,7 +10,12 @@ credential создан и provider добавлен. Первая sync выяв
 `search3 query=""`; нормализация этого запроса исправлена и развёрнута в code
 gate `a6b885b`. Следующая sync дошла до альбомов и остановилась на неизвестном
 годе, сериализованном как `null`; необязательные неизвестные metadata теперь
-опускаются в production gate `041b02a`. Initial sync нужно повторить.
+опускаются в production gate `041b02a`. После повторной sync каталог
+синхронизировался и реальный трек воспроизводится. Отсутствие
+обложек выявило Drive-only границу: gate `cec30ac` извлекает embedded artwork из
+ограниченного Range первых 5 МиБ и кэширует bounded JPEG. Живой production gate
+успешно проверен на трёх пользовательских альбомах; sync изображений нужно
+повторить в Symfonium.
 
 ## До подключения
 
@@ -60,6 +65,11 @@ Adapter трактует это значение как пустой wildcard-з
 bit depth и sample rate) не должны сериализоваться как JSON `null`: Symfonium
 14.1.0 ожидает число либо отсутствие поля. Gate `041b02a` применяет это правило
 к album и song DTO; production-каталог проверен на отсутствие `null`.
+
+Для Drive-only файла `getCoverArt` не материализует и не скачивает весь аудиофайл:
+он читает только первые 5 МиБ через существующий user-scoped Drive adapter,
+извлекает embedded picture с прежними byte/pixel limits и сохраняет только
+нормализованный JPEG в bounded cache. Artist portraits отдельно не синтезируются.
 
 ## Acceptance: initial / add / remove / offline
 

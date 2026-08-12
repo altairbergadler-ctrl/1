@@ -366,7 +366,10 @@ deployment завершены 2026-08-12. Реальный player credential с�
 полного обхода. Нормализация этого запроса развёрнута в code gate `a6b885b`;
 следующая попытка дошла до альбомов и выявила несовместимый `year: null`.
 Production gate `041b02a` опускает неизвестные необязательные metadata вместо
-JSON `null`; следующий шаг phone acceptance — ещё одна initial sync.
+JSON `null`; после этого каталог синхронизировался и трек воспроизводится.
+Gate `cec30ac` добавляет album/track artwork для Drive-only библиотеки через
+ограниченный Range первых 5 МиБ и bounded JPEG cache. Следующий шаг phone
+acceptance — повторная sync для загрузки изображений.
 
 - `backend/app/api/` — роутеры API, включая matching/download/auth/qobuz
 - `backend/app/opensubsonic/` — API-key auth, scoped catalog, protocol и artwork

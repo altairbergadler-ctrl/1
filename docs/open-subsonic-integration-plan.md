@@ -2,8 +2,8 @@
 
 Status: implementation and production deployment completed on 2026-08-12.
 Real-phone acceptance is in progress: a real player credential and Symfonium
-provider exist, compatibility gates through `041b02a` are deployed, and initial
-sync must now be repeated on the phone.
+provider exist, compatibility gates through `cec30ac` are deployed, catalog sync
+and playback pass, and image refresh must now be repeated on the phone.
 
 ## Boundaries
 
@@ -51,6 +51,9 @@ playlist `readonly`, and returns only original bytes with Range and HEAD support
 Metadata and binary delivery use the same local/Drive source resolver.
 Unknown optional numeric album/song metadata is omitted instead of serialized as
 JSON `null`, matching clients that model present fields as non-null values.
+Drive-only album/song artwork is read from a bounded 5 MiB prefix via the same
+account-scoped Range adapter as media delivery, then validated, resized and kept
+in the bounded JPEG cache; the full audio object is not materialized.
 
 The operator-facing Symfonium setup and initial/add/remove/offline acceptance
 sequence is documented in `player-sync-symfonium.md`. The server-side production
