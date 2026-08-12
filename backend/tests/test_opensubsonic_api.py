@@ -6,6 +6,7 @@ from datetime import timedelta
 from io import BytesIO
 from xml.etree.ElementTree import fromstring
 
+from mutagen.flac import Picture
 from PIL import Image
 from sqlalchemy import select
 
@@ -91,6 +92,34 @@ def _seed(db, root, *, email="owner@example.test", service=ServiceEnum.spotify):
 
 def _params(key, **extra):
     return {"apiKey": key, "v": "1.16.1", "c": "symfonium-test", "f": "json", **extra}
+
+
+def _flac_with_picture(picture_data: bytes) -> bytes:
+    picture = Picture()
+    picture.type = 3
+    picture.mime = "image/png"
+    picture.width = 32
+    picture.height = 32
+    picture.depth = 24
+    picture.data = picture_data
+    picture_block = picture.write()
+    packed_stream_info = (44_100 << 44) | (15 << 36) | 44_100
+    stream_info = (
+        (4096).to_bytes(2, "big")
+        + (4096).to_bytes(2, "big")
+        + bytes(6)
+        + packed_stream_info.to_bytes(8, "big")
+        + bytes(16)
+    )
+    return (
+        b"fLaC"
+        + bytes([0])
+        + len(stream_info).to_bytes(3, "big")
+        + stream_info
+        + bytes([0x86])
+        + len(picture_block).to_bytes(3, "big")
+        + picture_block
+    )
 
 
 def test_public_extension_and_api_key_only_auth(api_client):
@@ -547,6 +576,82 @@ def test_cover_art_is_owned_bounded_and_does_not_follow_outside_symlink(
         "/rest/getCoverArt", params=_params(key, id=f"ca:al:{album.opensubsonic_id}")
     )
     assert blocked.json()["subsonic-response"]["error"]["code"] == 70
+
+
+def test_cover_art_reads_bounded_embedded_picture_from_drive(
+    api_client, db, tmp_path, monkeypatch
+):
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr("app.services.delivery.settings.music_library_path", str(library))
+    monkeypatch.setattr(
+        "app.opensubsonic.artwork.settings.opensubsonic_artwork_cache_path",
+        str(tmp_path / "artwork-cache"),
+    )
+    monkeypatch.setattr(
+        "app.opensubsonic.artwork.settings.opensubsonic_artwork_remote_prefix_bytes",
+        64 * 1024,
+    )
+    _user, key, _playlist, _artist, album, track, _item, _content = _seed(db, library)
+    picture = BytesIO()
+    Image.new("RGB", (32, 32), "green").save(picture, format="PNG")
+    remote_body = _flac_with_picture(picture.getvalue())
+    file = db.scalar(select(File).where(File.track_id == track.id))
+    file.path = None
+    file.size_bytes = len(remote_body)
+    file.sha1 = hashlib.sha1(remote_body).hexdigest()
+    account = StorageAccount(
+        provider="google_drive",
+        email="opensubsonic-artwork@example.test",
+        root_folder_id="root",
+        enabled=True,
+        priority=1,
+        state="healthy",
+        credential_version=1,
+    )
+    db.add(account)
+    db.flush()
+    db.add(
+        DriveFileLocation(
+            file_id=file.id,
+            account_id=account.id,
+            remote_file_id="remote-artwork-song",
+            remote_name="remote-artwork-song.flac",
+            size_bytes=len(remote_body),
+            sha1=file.sha1,
+            state="healthy",
+        )
+    )
+    db.commit()
+    requested_ranges = []
+
+    class FakeResponse:
+        def iter_bytes(self, chunk_size=64 * 1024):
+            del chunk_size
+            yield remote_body
+
+    class FakeDownload:
+        response = FakeResponse()
+
+        def close(self):
+            return None
+
+    class FakeClient:
+        def open_download(self, remote_file_id, *, range_header=None):
+            assert remote_file_id == "remote-artwork-song"
+            requested_ranges.append(range_header)
+            return FakeDownload()
+
+    monkeypatch.setattr(
+        "app.services.delivery.client_for_account", lambda _db, _account: FakeClient()
+    )
+    response = api_client.get(
+        "/rest/getCoverArt",
+        params=_params(key, id=f"ca:al:{album.opensubsonic_id}", size="16"),
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+    assert requested_ranges == ["bytes=0-65535"]
 
 
 def test_cover_art_rejects_decompression_bomb_dimensions(

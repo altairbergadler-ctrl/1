@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     )
     opensubsonic_artwork_cache_ttl_seconds: int = Field(default=7 * 24 * 60 * 60, ge=3600)
     opensubsonic_artwork_max_input_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    opensubsonic_artwork_remote_prefix_bytes: int = Field(
+        default=5 * 1024 * 1024, ge=64 * 1024, le=32 * 1024 * 1024
+    )
     opensubsonic_artwork_max_pixels: int = Field(default=40_000_000, ge=1_000_000)
     opensubsonic_artwork_max_output_pixels: int = Field(default=2048, ge=64, le=4096)
 

@@ -17,8 +17,11 @@ from app.config import settings
 from app.opensubsonic.catalog import album_id, find_album, find_song, visible_tracks
 from app.opensubsonic.protocol import OpenSubsonicError
 from app.services.delivery import (
+    DeliveryEntry,
     DeliveryFileUnavailable,
     _safe_library_path,
+    best_playable_file,
+    open_remote_download,
     playable_file_quality,
 )
 
@@ -34,17 +37,13 @@ def _source_file(db: Session, user_id: int, public_id: str):
         tracks = [track] if track is not None else []
     else:
         return None
-    files = sorted(
-        (file for track in tracks for file in track.files if file.path),
-        key=playable_file_quality,
-        reverse=True,
-    )
-    for file in files:
+    sources = []
+    for track in tracks:
         try:
-            return file, _safe_library_path(file.path)
+            sources.append(best_playable_file(track))
         except DeliveryFileUnavailable:
             continue
-    return None
+    return max(sources, key=lambda row: playable_file_quality(row[0]), default=None)
 
 
 def _bounded_read(path: Path) -> bytes | None:
@@ -76,9 +75,9 @@ def _nearby(path: Path) -> bytes | None:
     return None
 
 
-def _embedded(path: Path) -> bytes | None:
+def _embedded(source) -> bytes | None:
     try:
-        audio = MutagenFile(path)
+        audio = MutagenFile(source)
     except Exception:
         return None
     if audio is None:
@@ -100,6 +99,41 @@ def _embedded(path: Path) -> bytes | None:
         data = bytes(covers[0])
         return data if len(data) <= settings.opensubsonic_artwork_max_input_bytes else None
     return None
+
+
+def _remote_embedded(db: Session, remote) -> bytes | None:
+    limit = settings.opensubsonic_artwork_remote_prefix_bytes
+    entry = DeliveryEntry(
+        path=None,
+        remote=remote,
+        filename=remote.remote_name,
+        artist="",
+        title="",
+        album="",
+        duration_ms=None,
+    )
+    try:
+        download = open_remote_download(
+            db,
+            entry,
+            range_header=f"bytes=0-{limit - 1}",
+        )
+    except DeliveryFileUnavailable:
+        return None
+    data = bytearray()
+    try:
+        for chunk in download.response.iter_bytes(chunk_size=64 * 1024):
+            remaining = limit - len(data)
+            if remaining <= 0:
+                break
+            data.extend(chunk[:remaining])
+            if len(data) >= limit:
+                break
+    except Exception:
+        return None
+    finally:
+        download.close()
+    return _embedded(BytesIO(data)) if data else None
 
 
 def _cleanup_cache(root: Path) -> None:
@@ -172,8 +206,10 @@ def cover_art_response(
     source = _source_file(db, user_id, public_id)
     if source is None:
         raise OpenSubsonicError(70, "Resource not found")
-    _file, path = source
-    data = _nearby(path) or _embedded(path)
+    _file, path, remote = source
+    data = (_nearby(path) or _embedded(path)) if path is not None else None
+    if not data and remote is not None:
+        data = _remote_embedded(db, remote)
     if not data:
         raise OpenSubsonicError(70, "Resource not found")
     try:
