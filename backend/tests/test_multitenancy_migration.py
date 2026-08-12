@@ -198,3 +198,45 @@ def test_direct_contract_refuses_to_drop_legacy_source_credentials(tmp_path):
             text("SELECT count(*) FROM playlist_sources WHERE access_token IS NOT NULL")
         ) == 1
     engine.dispose()
+
+
+def test_post_contract_release_upgrades_without_replaying_ownership_backfill(tmp_path):
+    database = (tmp_path / "post-contract.sqlite3").resolve()
+    database_url = f"sqlite+pysqlite:///{database.as_posix()}"
+    engine = create_engine(database_url)
+    _create_legacy_schema(engine)
+
+    _run_backend(
+        database_url,
+        "-m",
+        "alembic",
+        "upgrade",
+        "0008_google_user_auth_expand",
+    )
+    _run_backend(
+        database_url,
+        "-c",
+        "from app.commands import bootstrap_multitenancy, migrate_credentials; "
+        "migrate_credentials.migrate(); bootstrap_multitenancy.migrate()",
+    )
+    _run_backend(
+        database_url,
+        "-m",
+        "alembic",
+        "upgrade",
+        "0009_google_user_auth_contract",
+    )
+
+    migrated = _run_backend(database_url, "-m", "app.commands.migrate_database")
+    assert '"status":"migrated"' in migrated.stdout
+    assert '"status":"not_required"' in migrated.stdout
+
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+            "0010_open_subsonic_players"
+        )
+        assert connection.scalar(text("SELECT count(*) FROM player_credentials")) == 0
+        assert connection.scalar(
+            text("SELECT count(*) FROM playlists WHERE opensubsonic_id IS NULL")
+        ) == 0
+    engine.dispose()
