@@ -1032,6 +1032,17 @@ def qobuz_download_task(
                     ),
                 )
 
+            def check_batch_boundary(_summary=None):
+                pause_requested_at = db.scalar(
+                    select(Job.pause_requested_at).where(Job.id == job_id)
+                )
+                if pause_requested_at is not None:
+                    raise QobuzPauseRequested("manual")
+                if shutil.disk_usage(settings.qobuz_staging_path).free < (
+                    settings.qobuz_min_free_bytes
+                ):
+                    raise QobuzPauseRequested("disk_guard")
+
             def drain_completed_batch(summary, batch_files):
                 nonlocal scan_payload, matching_payload
                 import_report = import_files_to_library(
@@ -1116,12 +1127,7 @@ def qobuz_download_task(
                         separators=(",", ":"),
                     ),
                 )
-                current_job = db.get(Job, job_id)
-                if current_job.pause_requested_at is not None:
-                    raise QobuzPauseRequested("manual")
-                free_bytes = shutil.disk_usage(settings.qobuz_staging_path).free
-                if free_bytes < settings.qobuz_min_free_bytes:
-                    raise QobuzPauseRequested("disk_guard")
+                check_batch_boundary()
 
             downloads, _ = fetch_missing_tracks(
                 db,
@@ -1130,6 +1136,7 @@ def qobuz_download_task(
                 progress_callback=update_download_progress,
                 job_id=job_id,
                 batch_complete_callback=drain_completed_batch,
+                before_batch_callback=check_batch_boundary,
             )
             final_payload = json.dumps(
                 {

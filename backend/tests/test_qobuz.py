@@ -505,6 +505,7 @@ def test_fetch_missing_sweeps_every_unattempted_track_in_batches(
     sleeps: list[float] = []
     monkeypatch.setattr("app.services.qobuz.time.sleep", sleeps.append)
     snapshots: list[dict] = []
+    boundaries: list[int] = []
 
     summary, files = fetch_missing_tracks(
         db,
@@ -512,6 +513,9 @@ def test_fetch_missing_sweeps_every_unattempted_track_in_batches(
         FakeQobuzClient(),
         progress_callback=lambda progress: snapshots.append(
             json.loads(json.dumps(progress))
+        ),
+        before_batch_callback=lambda progress: boundaries.append(
+            progress["current_batch"]
         ),
     )
 
@@ -524,6 +528,7 @@ def test_fetch_missing_sweeps_every_unattempted_track_in_batches(
     assert summary["batch_count"] == 3
     assert summary["current_batch"] == 3
     assert sleeps == [7, 7]
+    assert boundaries == [0, 1, 2]
     assert [
         snapshot["current_batch"]
         for snapshot in snapshots

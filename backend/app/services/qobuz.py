@@ -759,6 +759,7 @@ def fetch_missing_tracks(
     progress_callback: Callable[[dict], None] | None = None,
     job_id: int | None = None,
     batch_complete_callback: Callable[[dict, list[Path]], None] | None = None,
+    before_batch_callback: Callable[[dict], None] | None = None,
 ) -> tuple[dict, list[Path]]:
     all_missing, items = missing_provider_items(db, playlist, "qobuz")
     batch_size = settings.qobuz_max_tracks_per_run
@@ -795,6 +796,8 @@ def fetch_missing_tracks(
     if progress_callback is not None:
         progress_callback(summary)
     for batch_index, batch_start in enumerate(range(0, len(items), batch_size)):
+        if before_batch_callback is not None:
+            before_batch_callback(summary)
         collected_before_batch = len(collected)
         batch_items = items[batch_start : batch_start + batch_size]
         batch_entries = entries[batch_start : batch_start + batch_size]
