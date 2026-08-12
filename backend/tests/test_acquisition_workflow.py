@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import func, select
 from app.models import Job, JobScope, JobStatus, Match, MatchStatus, Playlist, PlaylistItem, PlaylistSource, ServiceEnum, utcnow
-from app.services.acquisition import process_acquisition_batch
+from app.services.acquisition import _file_quality, process_acquisition_batch
 from app.services.acquisition_queue import queue_acquisition_job
 from app.workers.tasks import acquisition_dispatch_task
 from tests.helpers import ensure_user
@@ -40,6 +40,15 @@ def _playlist(db, *, email="queue@example.test", count=1, status=MatchStatus.mis
 def _matching(count, *, ready=0, missing=0):
     return SimpleNamespace(to_dict=lambda: {"processed": count}, ready=ready, missing=missing, needs_review=0)
 
+
+
+def test_quality_rank_uses_audio_properties_not_file_size():
+    small = SimpleNamespace(format="flac", bit_depth=24, sample_rate=96000, size_bytes=1)
+    large = SimpleNamespace(format="flac", bit_depth=24, sample_rate=96000, size_bytes=10**12)
+    lower = SimpleNamespace(format="flac", bit_depth=16, sample_rate=44100, size_bytes=10**12)
+
+    assert _file_quality(small) == _file_quality(large)
+    assert _file_quality(small) > _file_quality(lower)
 
 def test_queue_is_idempotent_and_preserves_quality_mode(db, monkeypatch):
     user, playlist = _playlist(db)

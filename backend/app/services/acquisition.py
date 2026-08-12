@@ -59,7 +59,7 @@ class ProviderChoice:
     provider: str
     candidate: Any
     selection: str
-    quality_rank: tuple[int, int, int, int]
+    quality_rank: tuple[int, int, int]
 
 
 _LOSSLESS_FORMATS = {"flac", "alac", "wav", "wave", "aiff", "dsf", "dff"}
@@ -70,23 +70,22 @@ def _sampling_rate(value: int | None) -> int:
     return rate * 1000 if 0 < rate < 1000 else rate
 
 
-def _file_quality(file: File) -> tuple[int, int, int, int]:
+def _file_quality(file: File) -> tuple[int, int, int]:
     return (
         int(str(file.format or "").casefold() in _LOSSLESS_FORMATS),
         int(file.bit_depth or 0),
         int(file.sample_rate or 0),
-        int(file.size_bytes or 0),
     )
 
 
-def _current_quality(db: Session, item: PlaylistItem) -> tuple[int, int, int, int]:
+def _current_quality(db: Session, item: PlaylistItem) -> tuple[int, int, int]:
     match = item.match
     if (
         match is None
         or match.status != MatchStatus.ready
         or match.track_id is None
     ):
-        return (0, 0, 0, 0)
+        return (0, 0, 0)
     files = list(db.scalars(select(File).where(File.track_id == match.track_id)))
     return max((_file_quality(file) for file in files), default=(0, 0, 0, 0))
 
@@ -199,7 +198,7 @@ def _probe_qobuz(
         )
         depth = int(best.maximum_bit_depth or 16)
         rate = _sampling_rate(best.maximum_sampling_rate or 44100)
-        return ProviderChoice("qobuz", best, method, (1, depth, rate, 0))
+        return ProviderChoice("qobuz", best, method, (1, depth, rate))
     except QobuzServiceError as exc:
         stats["failed"] += 1
         _record_attempt(
@@ -272,7 +271,7 @@ def _probe_yandex(
             "yandex",
             best,
             method,
-            (lossless, 16 if lossless else 0, 44100 if lossless else 0, int(info.bitrate or 0)),
+            (lossless, 16 if lossless else 0, 44100 if lossless else 0),
         )
     except YandexAcquisitionError as exc:
         stats["failed"] += 1
