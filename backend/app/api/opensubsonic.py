@@ -86,6 +86,8 @@ def _playlist_dto(db: Session, playlist: Playlist) -> dict:
         "created": changed(playlist.created_at),
         "changed": changed(playlist.sync_changed_at),
         "public": False,
+        # Playlist mutations are intentionally outside this read-only adapter. Clients such as
+        # Symfonium use this flag to keep their imported copy server-owned and auto-synced.
         "readonly": True,
     }
 

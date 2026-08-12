@@ -53,6 +53,8 @@ def _claimed_playable(track: Track) -> bool:
 
 
 def visible_tracks(db: Session, user_id: int) -> list[Track]:
+    # Browse/search is a flat, de-duplicated union of playable READY matches from all of the
+    # user's playlists. Playlist grouping is exposed separately by getPlaylists/getPlaylist.
     rows = db.scalars(
         select(Track)
         .join(Match, Match.track_id == Track.id)
@@ -101,6 +103,8 @@ def visible_playlist(db: Session, user_id: int, public_id: str) -> Playlist | No
 
 
 def playlist_tracks(db: Session, playlist: Playlist) -> list[tuple[PlaylistItem, Track]]:
+    # Do not de-duplicate here: source order and repeated entries are playlist semantics that
+    # must survive a read-only import into a mobile client.
     items = db.scalars(
         select(PlaylistItem)
         .where(PlaylistItem.playlist_id == playlist.id)

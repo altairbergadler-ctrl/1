@@ -102,6 +102,8 @@ def _embedded(source) -> bytes | None:
 
 
 def _remote_embedded(db: Session, remote) -> bytes | None:
+    # Drive-backed audio is never materialized just to discover artwork. A bounded prefix range
+    # is enough for normal FLAC/ID3 metadata while keeping memory and network use predictable.
     limit = settings.opensubsonic_artwork_remote_prefix_bytes
     entry = DeliveryEntry(
         path=None,
