@@ -71,6 +71,9 @@ def _sampling_rate(value: int | None) -> int:
 
 
 def _file_quality(file: File) -> tuple[int, int, int]:
+    # Keep stored files and provider probes on the same three dimensions.
+    # Encoded size is unknown while probing and would make cross-provider
+    # comparisons depend on information that only exists after a download.
     return (
         int(str(file.format or "").casefold() in _LOSSLESS_FORMATS),
         int(file.bit_depth or 0),
@@ -87,7 +90,7 @@ def _current_quality(db: Session, item: PlaylistItem) -> tuple[int, int, int]:
     ):
         return (0, 0, 0)
     files = list(db.scalars(select(File).where(File.track_id == match.track_id)))
-    return max((_file_quality(file) for file in files), default=(0, 0, 0, 0))
+    return max((_file_quality(file) for file in files), default=(0, 0, 0))
 
 
 def _stored_by_workflow(db: Session, item: PlaylistItem, job_id: int) -> bool:
@@ -317,6 +320,9 @@ def _prepare_workflow(db: Session, job: Job, playlist: Playlist, payload: dict) 
             for item in items
             if item.match is not None and item.match.status == MatchStatus.missing
         ]
+    # Batch size counts playlist positions, not successful downloads. Every
+    # examined position advances the cursor, including unavailable, current-
+    # quality, and already-stored tracks.
     payload["item_ids"] = [item.id for item in items]
     payload["total_positions"] = len(items)
     payload["processed_positions"] = 0
@@ -336,6 +342,8 @@ def _finish_workflow(db: Session, job: Job, playlist: Playlist, payload: dict) -
     payload["free_disk_bytes"] = shutil.disk_usage(
         settings.qobuz_staging_path
     ).free
+    # Completion is the only browser-notification boundary: intermediate
+    # batches remain visible through job progress without generating pushes.
     notification = send_workflow_completed(
         db,
         user_id=job.user_id,
@@ -377,6 +385,9 @@ def process_acquisition_batch(db: Session, job: Job) -> tuple[dict, float | None
         int(value) for value in payload.get("pending_file_ids", []) if value is not None
     ]
     if pending_paths or pending_file_ids:
+        # Do not advance the batch cursor until Drive has verified each upload
+        # and evicted its local original. A retry therefore resumes the drain
+        # phase instead of starting another download batch.
         if not pending_file_ids:
             _phase(db, job, payload, "scanning")
             try:
