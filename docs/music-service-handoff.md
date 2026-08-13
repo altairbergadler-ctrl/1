@@ -11,10 +11,11 @@
 - Работать только на сервере через `ssh openclaw-vps`; production-ссылка:
   `/opt/audiofeel/app`.
 - Развёрнутый production SHA: `cd403a2f308e86abcdc9d7441a0e9644d42892db`.
-- Ветка GitHub `codex/qobuz-hardening` находится на
-  `92f65ffb15ebc1b88739f7b3eb0b3eb342d975b4`. Она опережает production
-  небольшим исправлением рейтинга качества и поясняющими комментариями;
-  её дерево проверено на совпадение с серверным worktree.
+- Последний commit, изменяющий код в `codex/qobuz-hardening`:
+  `92f65ffb15ebc1b88739f7b3eb0b3eb342d975b4`. Он опережает production
+  небольшим исправлением рейтинга качества и поясняющими комментариями.
+- Сам handoff публикуется последующим docs-only commit, поэтому точный tip
+  ветки всегда получать через `git ls-remote` и сверять с серверным tree.
 - Alembic: `0012_web_push_subscriptions (head)`.
 - backend, frontend, PostgreSQL, Redis, Qobuz sidecar и Yandex signer healthy;
   worker/beat/egress running; Celery отвечает `pong`.
