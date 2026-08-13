@@ -1,13 +1,53 @@
 # Music Service MVP: handoff для новых чатов
 
-Актуально на: 2026-08-12
-Статус: Google Sign-In/multi-user, read-only OpenSubsonic adapter, открытая
-регистрация и RBAC развёрнуты в production на
-`8595779f9977611904ede10b909f2a08c2cb904e`; Alembic находится на
-`0010_open_subsonic_players`. Real-phone acceptance Symfonium завершён:
-пользователь подтвердил catalog sync, playback и загрузку изображений.
-Предыдущая production-опора до OpenSubsonic migration:
-`04083910c0f1c109fff598d083bfc8a9e6085a27`.
+Актуально на: 2026-08-13
+
+## 0. Текущая точка продолжения
+
+Этот раздел — единственный краткий источник текущего операционного состояния.
+Нижние разделы сохраняют решения и исторические проверки, но их SHA и counts
+не следует считать актуальными без повторной проверки production.
+
+- Работать только на сервере через `ssh openclaw-vps`; production-ссылка:
+  `/opt/audiofeel/app`.
+- Развёрнутый production SHA: `cd403a2f308e86abcdc9d7441a0e9644d42892db`.
+- Ветка GitHub `codex/qobuz-hardening` находится на
+  `92f65ffb15ebc1b88739f7b3eb0b3eb342d975b4`. Она опережает production
+  небольшим исправлением рейтинга качества и поясняющими комментариями;
+  её дерево проверено на совпадение с серверным worktree.
+- Alembic: `0012_web_push_subscriptions (head)`.
+- backend, frontend, PostgreSQL, Redis, Qobuz sidecar и Yandex signer healthy;
+  worker/beat/egress running; Celery отвечает `pong`.
+- Google Drive: один включённый account, live health = `healthy`,
+  detail = `drive_ready`.
+- Диск: 79 ГБ всего, 42 ГБ свободно, занято 48%; в локальной библиотеке
+  музыкальных файлов нет.
+- Legacy Qobuz job №25 завершена (`done`). Unified acquisition jobs №28 и №31
+  остаются в `pending + paused`; последняя причина — `disk_guard`. Job №28:
+  25/58 позиций, 12 скачанных, 10 загруженных в Drive, 12 локально удалённых
+  файлов. Job №31: 0/6. Не возобновлять их без прямого указания пользователя,
+  даже если свободное место уже восстановилось.
+- Последний полный изолированный server test: `345 passed, 5 skipped`.
+- Проверенные резервные копии:
+  `/var/backups/audiofeel/pre-acquisition-flow-20260812T233056Z.dump` и
+  `/var/backups/audiofeel/pre-qobuz-pause-20260812T203423Z.dump`.
+
+Неподвижные правила текущего flow:
+
+1. Пачка означает 25 позиций плейлиста, а не 25 успешных скачиваний.
+2. После скачивания пачка обязана пройти import → scan → Drive upload →
+   remote verify → local eviction; только затем двигается cursor и допускается
+   следующая пачка.
+3. Все затронутые импортом плейлисты автоматически попадают в единую
+   provider-neutral очередь. Qobuz и Яндекс проверяются до выбора лучшего
+   доступного качества; режим «Обновлять качество» разрешает замену READY-файла
+   только фактическим улучшением.
+4. Очередь глобально выполняет одну acquisition-пачку и чередует пользователей.
+5. Browser Push отправляется только после завершения всех пачек и финального
+   matching. Google/Firebase app для этого не требуется: используется VAPID.
+6. Не выводить `.env`, OAuth-коды, provider tokens, пароли, cookies и Push
+   subscription endpoints. Перед миграцией делать и проверять backup; перед
+   deployment сверять remote SHA и tree.
 
 ## 1. Назначение документа
 
@@ -21,15 +61,22 @@
 5. `docs/playlist-import.md`;
 6. `docs/google-drive-storage.md`;
 7. `docs/provider-health-credential-rotation.md`;
-8. `docs/vps-deployment.md`.
+8. `docs/acquisition-workflow.md`;
+9. `docs/vps-deployment.md`.
 
 Никакие секреты в Git не хранятся. Не выводить в логи и чат значения
 `.env`, OAuth codes, provider tokens, passwords и session cookies.
 
+После каждого завершённого этапа нужно обновить раздел 0 тем же commit, что и
+код/документацию, либо отдельным handoff-commit сразу после него. Обязательно
+разделять GitHub SHA и реально развёрнутый SHA, фиксировать migration, проверки,
+backup и безопасно приостановленные jobs. Полную историю чата в новый чат не
+переносить: достаточно короткого prompt из раздела 8.
+
 ## 2. Что реализовано
 
 - Docker Compose: PostgreSQL, Redis, FastAPI, Celery, Nginx/PWA.
-- Alembic: `0009_google_user_auth_contract (head)`; Compose выполняет
+- Alembic: `0012_web_push_subscriptions (head)`; Compose выполняет
   expand/backfill/contract через `app.commands.migrate_database`.
 - Read-only монтирование реальной библиотеки через
   `MUSIC_LIBRARY_HOST_PATH`; локально используется `X:/Music`.
@@ -150,7 +197,7 @@ acceptance-user намеренно оставлен в состоянии `disab
 source, playlist, item и job, но не изменили число `File`, SHA-1 или Drive
 locations.
 
-### 3.2 Открытая регистрация и RBAC — текущий gate
+### 3.2 Открытая регистрация и RBAC — исторический gate
 
 - новый подтверждённый Google identity атомарно создаётся как `active user`;
 - disabled identity не может зарегистрироваться повторно, а email другого
@@ -400,7 +447,7 @@ Sonic Analysis; их нельзя обещать для нашего OpenSubsoni
 
 ## 7. Ключевая история Git
 
-### OpenSubsonic iteration — опубликовано и развёрнуто
+### 7.1 OpenSubsonic iteration — опубликовано и развёрнуто
 
 - additive `/rest/*` adapter и PWA-раздел «Плееры»;
 - per-device API keys с one-time display, HMAC storage, revoke и user-disable cascade;
@@ -471,10 +518,9 @@ offline-сценарию из `docs/player-sync-symfonium.md` без перев�
 - `b317757` — merge соседней ветки с исходным Qobuz-прототипом; hardening
   выполняется отдельно в `codex/qobuz-hardening`.
 
-## 8. Короткий prompt для нового чата
 ### 7.3 Provider-neutral acquisition queue и final-only Push
 
-В ветке `codex/acquisition-queue-push` реализован новый единый flow:
+В ветке `codex/qobuz-hardening` реализован новый единый flow:
 
 - любой импорт автоматически ставит затронутые плейлисты в очередь;
 - Qobuz и Яндекс проверяются последовательно, сохраняется лучший кандидат;
@@ -501,11 +547,15 @@ browser subscription требуют пользовательского жест�
 очередь.
 
 
-> Продолжи работу в репозитории Music Service. Сначала прочитай
-> `docs/music-service-handoff.md`, `docs/music-service-mvp-plan.md`,
-> `docs/music-service-logic.md`, `docs/google-user-auth.md` и `README.md`;
-> проверь `git status`, локальный/remote/deployed SHA, Alembic и Docker.
-> Google Sign-In использует публичную регистрацию `user` со stable `sub`, а Drive OAuth —
-> отдельный client. Не начинай Release 2 без моего
-> явного указания. Текущий следующий scope бери только из раздела 6
-> handoff-документа и после моего выбора.
+## 8. Короткий prompt для нового чата
+
+В новый чат переносится только следующий блок. Актуальные детали нужно взять
+из раздела 0 и подтвердить на живом сервере.
+
+> Продолжи Music Service. Работай только на сервере через
+> `ssh openclaw-vps`; локальный Windows и локальный Docker не используй.
+> Сначала полностью прочитай `docs/music-service-handoff.md`, затем README и
+> связанные с текущей задачей документы. Проверь live production, GitHub и
+> deployed SHA, Alembic, сервисы, Celery, Drive, диск и paused jobs. Ничего не
+> возобновляй автоматически и не выводи секреты или содержимое `.env`. Начни
+> с короткого отчёта о расхождениях и выполняй только явно согласованный scope.
