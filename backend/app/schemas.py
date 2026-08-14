@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 class HealthOut(BaseModel):
     status: str = "ok"
+    app_version: str
     release_sha: str
 
 

@@ -1,6 +1,7 @@
-# Music Service — MVP (Google Sign-In и multi-user)
+# Audiofeel 1.0 — Music Service
 
-Hi-Res музыкальный архив: импорт плейлистов Spotify/Яндекс.Музыки и
+Self-hosted Hi-Res музыкальный архив с Google Sign-In и multi-user:
+импорт плейлистов Spotify/Яндекс.Музыки и
 CSV/M3U/текстовых списков,
 матчинг с локальной lossless-библиотекой, bit-perfect выдача на смартфон.
 
@@ -27,8 +28,8 @@ docker compose up --build
 health и recovery доступны, а начало Google-входа безопасно возвращает ошибку
 конфигурации. Ни один из этих файлов не добавляется в Git.
 
-Проверка API: `curl http://localhost:8000/api/health` → status `ok` и
-`release_sha` текущего deployment.
+Проверка API: `curl http://localhost:8000/api/health` → status `ok`,
+`app_version: "1.0.0"` и `release_sha` текущего deployment.
 PWA открывается на `http://localhost:8080`.
 
 Миграция выполняется отдельным сервисом `migrate` до запуска API и Celery.
@@ -46,6 +47,22 @@ backend его не видит. Яндекс-загрузки использую
 останавливается при неоднозначном владельце. Для ручного применения:
 `docker compose run --rm migrate`. Модель, backup и rollback описаны в
 [`docs/google-user-auth.md`](docs/google-user-auth.md).
+
+## Интерфейс Audiofeel 1.0
+
+Основной PWA использует тёмную editorial-систему Audiofeel: постоянную
+навигацию на desktop, компактный tablet-режим и горизонтальную мобильную
+навигацию. Сегментированный прогресс плейлиста всегда строится из реальных
+READY/NEEDS_REVIEW/MISSING/UNMATCHED counts.
+
+Inter и Literata self-hosted в `frontend/fonts/`; runtime-запросов к Google
+Fonts нет. `frontend/redesign.css` загружается после базового stylesheet и
+является основным визуальным слоем, не дублируя API или backend. Canonical
+версия хранится в `backend/app/version.py`, UI показывает короткую `1.0`.
+PWA cache `audiofeel-v19` включает новый stylesheet и локальные fonts.
+
+Решения, responsive contract и ограничения безопасности:
+[`docs/audiofeel-v1-design.md`](docs/audiofeel-v1-design.md).
 
 ## API библиотеки
 

@@ -1,6 +1,6 @@
-# Music Service MVP: handoff для новых чатов
+# Audiofeel 1.0 / Music Service: handoff для новых чатов
 
-Актуально на: 2026-08-13
+Актуально на: 2026-08-14
 
 ## 0. Текущая точка продолжения
 
@@ -10,25 +10,40 @@
 
 - Работать только на сервере через `ssh openclaw-vps`; production-ссылка:
   `/opt/audiofeel/app`.
-- Развёрнутый production SHA: `cd403a2f308e86abcdc9d7441a0e9644d42892db`.
-- Последний commit, изменяющий код в `codex/qobuz-hardening`:
-  `92f65ffb15ebc1b88739f7b3eb0b3eb342d975b4`. Он опережает production
-  небольшим исправлением рейтинга качества и поясняющими комментариями.
-- Сам handoff публикуется последующим docs-only commit, поэтому точный tip
-  ветки всегда получать через `git ls-remote` и сверять с серверным tree.
+- До публикации Audiofeel 1.0 production SHA был
+  `cd403a2f308e86abcdc9d7441a0e9644d42892db`. Текущий deployed SHA всегда
+  получать из `/api/health` и сверять с immutable release directory.
+- GitHub tip `codex/acquisition-queue-push` на момент pre-change audit:
+  `5ef3555eda223b5482311017c3d07324f090de44`. Он на три commit опережает
+  production: один небольшой code/comment change и два docs-only commit.
+- Redesign ведётся только на сервере в
+  `/opt/audiofeel/worktrees/audiofeel-redesign-v1-20260814`, ветка
+  `codex/audiofeel-redesign-v1`, base = `5ef3555`. Публиковать только
+  immutable release commit и доказывать совпадение GitHub/deployed SHA.
+- Версия релиза: UI `1.0`, canonical API version `1.0.0`; release tag
+  `v1.0.0` создаётся только после успешного production gate.
 - Alembic: `0012_web_push_subscriptions (head)`.
 - backend, frontend, PostgreSQL, Redis, Qobuz sidecar и Yandex signer healthy;
   worker/beat/egress running; Celery отвечает `pong`.
 - Google Drive: один включённый account, live health = `healthy`,
   detail = `drive_ready`.
-- Диск: 79 ГБ всего, 42 ГБ свободно, занято 48%; в локальной библиотеке
+- Диск: 79 ГБ всего, 39 ГБ свободно, занято 52%; в локальной библиотеке
   музыкальных файлов нет.
 - Legacy Qobuz job №25 завершена (`done`). Unified acquisition jobs №28 и №31
   остаются в `pending + paused`; последняя причина — `disk_guard`. Job №28:
   25/58 позиций, 12 скачанных, 10 загруженных в Drive, 12 локально удалённых
   файлов. Job №31: 0/6. Не возобновлять их без прямого указания пользователя,
   даже если свободное место уже восстановилось.
-- Последний полный изолированный server test: `345 passed, 5 skipped`.
+- Audiofeel 1.0 server verification: JavaScript/manifest/diff clean,
+  frontend image build успешен, backend `346 passed, 5 skipped`, Qobuz
+  sidecar `9 tests OK`, чистая временная PostgreSQL дошла до Alembic
+  `0012 (head)`.
+- Визуально проверены безопасные fixture-render без production credentials:
+  desktop 1440×1100, tablet 900×1100, mobile 390×844 и login 1200×800.
+  Плейлисты находятся в первом экране, импорт сохранён в раскрывающемся блоке.
+- Pre-publication live health возвращал старую схему без `app_version`.
+  Production gate Audiofeel 1.0 обязан подтвердить `app_version=1.0.0`,
+  новый `release_sha`, cache `audiofeel-v19` и неизменность paused jobs.
 - Проверенные резервные копии:
   `/var/backups/audiofeel/pre-acquisition-flow-20260812T233056Z.dump` и
   `/var/backups/audiofeel/pre-qobuz-pause-20260812T203423Z.dump`.
@@ -49,6 +64,11 @@
 6. Не выводить `.env`, OAuth-коды, provider tokens, пароли, cookies и Push
    subscription endpoints. Перед миграцией делать и проверять backup; перед
    deployment сверять remote SHA и tree.
+7. Audiofeel 1.0 заменяет только frontend shell/styles и public version
+   metadata. Backend API, user isolation, provider flow, Drive replication,
+   delivery и paused-job semantics остаются прежними. Mock data/credentials из
+   HTML-прототипа не переносятся; подробности:
+   `docs/audiofeel-v1-design.md`.
 
 ## 1. Назначение документа
 
@@ -101,6 +121,9 @@ backup и безопасно приостановленные jobs. Полную
   infrastructure Drive vaults.
 - PWA с Google login/logout и owner-разделом role/disable/revoke;
   session/CSRF tokens не сохраняются в Web Storage.
+- Audiofeel 1.0 editorial UI с реальными playlist/status counts,
+  self-hosted Inter/Literata, desktop/tablet/mobile navigation и PWA cache
+  `audiofeel-v19`; canonical backend version = `1.0.0`.
 - `APP_AUTH_TOKEN` изолирован в `/#/recovery` и не принимается обычным API.
 - Приватный внешний доступ через Tailscale Serve HTTPS. Funnel не включён.
 - Provider Health & Credential Rotation: раздельные account/API/sidecar/worker

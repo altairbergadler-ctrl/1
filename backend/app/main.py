@@ -23,8 +23,9 @@ from app.api import (
 from app.config import settings
 from app.schemas import HealthOut
 from app.services import playlist_sync_revision as _playlist_sync_revision  # noqa: F401
+from app.version import APP_VERSION
 
-app = FastAPI(title="Music Service MVP", version="0.4.0")
+app = FastAPI(title="Audiofeel", version=APP_VERSION)
 
 
 @app.exception_handler(RequestValidationError)
@@ -55,7 +56,7 @@ async def private_api_no_store(request: Request, call_next):
 
 @app.get("/api/health", response_model=HealthOut)
 def health():
-    return HealthOut(release_sha=settings.release_sha)
+    return HealthOut(app_version=APP_VERSION, release_sha=settings.release_sha)
 
 
 app.include_router(acquisition.router, prefix="/api/acquisition", tags=["acquisition"])

@@ -1,11 +1,16 @@
-const CACHE_NAME = "lossless-archive-v18";
+const CACHE_NAME = "audiofeel-v19";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/styles.css",
+  "/redesign.css",
   "/app.js",
   "/manifest.webmanifest",
   "/icon.svg",
+  "/fonts/inter-cyrillic.woff2",
+  "/fonts/inter-latin.woff2",
+  "/fonts/literata-cyrillic.woff2",
+  "/fonts/literata-latin.woff2",
 ];
 
 self.addEventListener("install", (event) => {

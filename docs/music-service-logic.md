@@ -56,7 +56,11 @@
 - **Data layer** — PostgreSQL + файловая структура NAS.
 - **Worker layer** — асинхронные воркеры: скрапинг, загрузка, сканирование, матчинг.
 - **API layer** — REST/GraphQL для Web UI и мобильного клиента.
-- **Client layer** — адаптивный Web UI (PWA) для смартфона; воспроизведение — во внешнем плеере пользователя.
+- **Client layer** — Audiofeel 1.0: адаптивный Web UI (PWA) с desktop sidebar,
+  tablet compact mode и мобильной горизонтальной навигацией; воспроизведение —
+  во внешнем плеере пользователя. Визуальный слой использует существующие API,
+  не раскрывает сохранённые credentials и загружает self-hosted fonts. Полный
+  UI contract: `docs/audiofeel-v1-design.md`.
 
 ### Identity и access layer
 

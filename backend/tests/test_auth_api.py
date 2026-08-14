@@ -3,6 +3,7 @@ def test_health_exposes_non_secret_release_identity(api_client):
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["app_version"] == "1.0.0"
     assert response.json()["release_sha"]
     assert response.headers["Cache-Control"] == "private, no-store"
 

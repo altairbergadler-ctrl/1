@@ -42,7 +42,7 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "lossless-archive-v17";' in service_worker
+    assert 'const CACHE_NAME = "audiofeel-v19";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
 
@@ -103,7 +103,7 @@ def test_pwa_uses_public_google_registration_and_role_admin():
     assert 'api("/api/auth/me"' in app_script
     assert 'headers.set("X-CSRF-Token", csrfToken)' in app_script
     assert 'api("/api/auth/logout", { method: "POST" })' in app_script
-    assert 'href="#/playlists">Плейлисты</a>' in app_script
+    assert 'navLink("playlists", "Плейлисты")' in app_script
     assert 'api("/api/admin/users")' in app_script
     assert 'class="user-role-select"' in app_script
     assert 'method: "PATCH"' in app_script
@@ -200,7 +200,7 @@ def test_playlist_renders_persisted_yandex_track_progress_and_quality():
 def test_player_page_uses_one_time_memory_only_api_key():
     root = Path(__file__).resolve().parents[2] / "frontend"
     app_script = (root / "app.js").read_text(encoding="utf-8")
-    assert 'href="#/players"' in app_script
+    assert 'navLink("players", "Плееры")' in app_script
     assert 'api("/api/player-credentials"' in app_script
     assert "state.playerSecret" in app_script
     assert "localStorage" not in app_script
@@ -233,7 +233,7 @@ def test_pwa_push_only_handles_final_workflow_completion():
     service_worker = (root / "service-worker.js").read_text(encoding="utf-8")
     manifest = (root / "manifest.webmanifest").read_text(encoding="utf-8")
 
-    assert 'href="#/notifications"' in app_script
+    assert 'navLink("notifications", "Уведомления")' in app_script
     assert "\nfunction base64UrlToBytes" in app_script
     assert "\nfunction acquisitionProgressPanel" in app_script
     assert 'Notification.requestPermission()' in app_script
@@ -241,3 +241,19 @@ def test_pwa_push_only_handles_final_workflow_completion():
     assert 'payload?.type !== "workflow_completed"' in service_worker
     assert 'self.addEventListener("notificationclick"' in service_worker
     assert '"id": "/"' in manifest
+
+
+def test_audiofeel_v1_shell_is_local_and_offline_ready():
+    root = Path(__file__).resolve().parents[2] / "frontend"
+    index = (root / "index.html").read_text(encoding="utf-8")
+    app_script = (root / "app.js").read_text(encoding="utf-8")
+    styles = (root / "redesign.css").read_text(encoding="utf-8")
+    service_worker = (root / "service-worker.js").read_text(encoding="utf-8")
+
+    assert '<link rel="stylesheet" href="/redesign.css">' in index
+    assert 'const APP_VERSION = "1.0";' in app_script
+    assert 'class="app app-shell"' in app_script
+    assert "fonts.googleapis.com" not in index
+    assert 'url("/fonts/inter-cyrillic.woff2")' in styles
+    assert '"/redesign.css"' in service_worker
+    assert '"/fonts/literata-latin.woff2"' in service_worker

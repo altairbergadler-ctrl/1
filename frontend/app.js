@@ -1,5 +1,6 @@
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
+const APP_VERSION = "1.0";
 
 const state = {
   authenticated: false,
@@ -73,6 +74,41 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+const navigationIcons = {
+  playlists: '<path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="2"/>',
+  review: '<path d="m9 11 2 2 4-4"/><path d="M21 12a9 9 0 1 1-5.3-8.2"/><path d="M17 3h4v4"/>',
+  players: '<rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="12" cy="15" r="3"/><path d="M9 7h6"/>',
+  notifications: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>',
+  storage: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+  providers: '<path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="7"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 1-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+};
+
+function navigationIcon(name) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${navigationIcons[name] || navigationIcons.playlists}</svg>`;
+}
+
+function routeKey() {
+  return (window.location.hash.replace(/^#\//, "").split(/[/?]/)[0] || "playlists");
+}
+
+function routeLabel(route) {
+  return {
+    playlists: "Плейлисты",
+    review: "Проверка совпадений",
+    players: "Плееры",
+    notifications: "Уведомления",
+    storage: "Хранилище",
+    providers: "Провайдеры",
+    users: "Пользователи",
+  }[route] || "Плейлисты";
+}
+
+function userInitials(value) {
+  const words = String(value || "A").trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "A";
+}
+
 function showToast(message, timeout = 4200) {
   toast.textContent = message;
   toast.hidden = false;
@@ -118,39 +154,72 @@ async function api(path, options = {}) {
     } catch {
       // The status is sufficient when a proxy returned a non-JSON error page.
     }
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 }
 
 function shell(content) {
-  const ownerLinks = state.currentUser?.role === "owner" ? `
-    <a class="button ghost small" href="#/users">Пользователи</a>
-    <a class="button ghost small" href="#/storage">Хранилище</a>
-    <a class="button ghost small" href="#/providers">Провайдеры</a>
-  ` : "";
   const identity = state.currentUser?.display_name || state.currentUser?.email || "";
+  const currentRoute = routeKey();
+  const navLink = (route, label) => `
+    <a class="navlink" href="#/${route}" ${currentRoute === route ? 'aria-current="page"' : ""}>
+      ${navigationIcon(route)}<span>${escapeHtml(label)}</span>
+    </a>
+  `;
+  const ownerLinks = state.currentUser?.role === "owner" ? `
+    <p class="side__group">Система</p>
+    <nav class="side__nav" aria-label="Управление системой">
+      ${navLink("storage", "Хранилище")}
+      ${navLink("providers", "Провайдеры")}
+      ${navLink("users", "Пользователи")}
+    </nav>
+  ` : "";
   return `
-    <div class="shell">
-      <header class="topbar">
-        <a class="brand" href="#/playlists" aria-label="К списку плейлистов">
-          <span class="brand-mark" aria-hidden="true">●</span>
-          <span>
-            <span class="brand-name">Lossless Archive</span>
-            <span class="brand-subtitle">bit-perfect library</span>
+    <div class="app app-shell">
+      <aside class="side">
+        <a class="side__brand" href="#/playlists" aria-label="Audiofeel — к списку плейлистов">
+          <span class="side__mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span class="side__brandtext">
+            <span class="side__name">Audiofeel</span>
+            <span class="side__tag">LOSSLESS ARCHIVE</span>
           </span>
         </a>
-        <nav class="nav-actions" aria-label="Основная навигация">
-          <span class="current-user" title="Текущий пользователь">${escapeHtml(identity)}</span>
-          <a class="button ghost small" href="#/playlists">Плейлисты</a>
-          <a class="button ghost small" href="#/players">Плееры</a>
-          <a class="button ghost small" href="#/notifications">Уведомления</a>
-          ${ownerLinks}
-          <a class="button ghost small" href="#/review">Review</a>
-          <button class="ghost small" type="button" data-action="logout">Выйти</button>
+        <p class="side__group">Медиатека</p>
+        <nav class="side__nav" aria-label="Основная навигация">
+          ${navLink("playlists", "Плейлисты")}
+          ${navLink("review", "Проверка")}
+          ${navLink("players", "Плееры")}
+          ${navLink("notifications", "Уведомления")}
         </nav>
-      </header>
-      ${content}
+        ${ownerLinks}
+        <div class="side__foot">
+          <div class="side__user">
+            <span class="avatar" aria-hidden="true">${escapeHtml(userInitials(identity))}</span>
+            <span class="side__userdata">
+              <strong title="${escapeHtml(identity)}">${escapeHtml(identity)}</strong>
+              <small>${state.currentUser?.role === "owner" ? "Владелец" : "Пользователь"}</small>
+            </span>
+            <button class="icon-button" type="button" data-action="logout" title="Выйти" aria-label="Выйти">↗</button>
+          </div>
+        </div>
+      </aside>
+      <div class="main workspace">
+        <header class="topbar">
+          <a class="mobile-brand" href="#/playlists" aria-label="Audiofeel">
+            <span class="side__mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <strong>Audiofeel</strong>
+          </a>
+          <p class="crumbs"><span>Audiofeel</span><b>/</b><strong>${escapeHtml(routeLabel(currentRoute))}</strong></p>
+          <div class="topbar__right">
+            <span class="version-badge">v${APP_VERSION}</span>
+            <button class="topbar__logout" type="button" data-action="logout">Выйти</button>
+          </div>
+        </header>
+        <div class="view">${content}</div>
+      </div>
     </div>
   `;
 }
@@ -274,6 +343,7 @@ function renderLogin(message = "") {
         <p class="form-error" role="alert">${escapeHtml(message)}</p>
         <p class="muted login-help">Владелец управляет системными настройками, обычный пользователь — только своей фонотекой.</p>
         <a class="recovery-link" href="#/recovery">Аварийное восстановление владельца</a>
+        <span class="login-version">Audiofeel ${APP_VERSION}</span>
       </section>
     </main>
   `;
@@ -622,24 +692,36 @@ async function recoveryAction(action) {
 
 function playlistCard(playlist) {
   const { summary } = playlist;
+  const total = Math.max(1, Number(playlist.track_count || 0));
+  const ready = Math.max(0, Number(summary.ready || 0));
+  const review = Math.max(0, Number(summary.review || 0));
+  const missing = Math.max(0, Number(summary.missing || 0));
+  const unmatched = Math.max(0, total - ready - review - missing);
+  const width = (value) => Math.max(0, Math.min(100, value / total * 100));
+  const percent = Math.max(0, Math.min(100, Number(summary.collected_percent || 0)));
   return `
-    <article class="card">
-      <div>
-        <span class="source-badge">${escapeHtml(playlist.service)}</span>
-        <h3>${escapeHtml(playlist.name)}</h3>
+    <article class="plcard">
+      <div class="plcard__top">
+        <span class="plcard__src">${escapeHtml(playlist.service)}</span>
+        <span class="plcard__meta">${Number(playlist.track_count || 0)} треков</span>
       </div>
-      <div>
-        <div class="progress" aria-label="Собрано ${summary.collected_percent}%">
-          <span style="width: ${Math.max(0, Math.min(100, summary.collected_percent))}%"></span>
-        </div>
-        <div class="summary-line">
-          <span>${summary.ready} из ${playlist.track_count} готовы</span>
-          <span>${summary.review} review · ${summary.missing} нет</span>
-        </div>
-        <div class="action-row" style="margin-top: 20px">
-          <a class="button secondary small" href="#/playlist/${playlist.id}">Открыть</a>
-        </div>
+      <h3>${escapeHtml(playlist.name)}</h3>
+      <div class="plcard__score">
+        <strong class="plcard__pct">${percent}%</strong>
+        <span>собрано без потерь</span>
       </div>
+      <div class="seg" role="img" aria-label="Готово ${ready}, проверить ${review}, отсутствует ${missing}, не обработано ${unmatched}">
+        <i class="s-ok" style="width:${width(ready)}%"></i>
+        <i class="s-warn" style="width:${width(review)}%"></i>
+        <i class="s-err" style="width:${width(missing)}%"></i>
+        <i class="s-idle" style="width:${width(unmatched)}%"></i>
+      </div>
+      <div class="plcard__legend">
+        <span><i class="dot s-ok"></i>${ready}</span>
+        <span><i class="dot s-warn"></i>${review}</span>
+        <span><i class="dot s-err"></i>${missing}</span>
+      </div>
+      <a class="plcard__link" href="#/playlist/${playlist.id}">Открыть плейлист <span aria-hidden="true">→</span></a>
     </article>
   `;
 }
@@ -1299,27 +1381,44 @@ async function renderPlaylists() {
     );
     app.innerHTML = shell(`
       <main>
-        <section class="page-header">
+        <section class="page-header phead">
           <div>
-            <p class="eyebrow">КОЛЛЕКЦИЯ</p>
+            <p class="eyebrow phead__eyebrow">КОЛЛЕКЦИЯ</p>
             <h1>Плейлисты в вашем архиве</h1>
-            <p class="lede">Сразу видно, что найдено в lossless-библиотеке, а что требует вашего решения.</p>
+            <p class="lede phead__sub">Сразу видно, что найдено в lossless-библиотеке, а что требует вашего решения.</p>
           </div>
-          <div class="action-row">
+          <div class="action-row phead__actions">
+            <button class="secondary" type="button" data-action="toggle-import">Импортировать</button>
             <button type="button" data-action="match" data-playlist-id="">Сопоставить всё</button>
             <a class="button secondary" href="#/review">Открыть review</a>
           </div>
         </section>
-        ${playlistConverterCard()}
-        ${playlistUrlImportCard(spotifySource)}
-        ${qobuzSourceCard(qobuzStatus)}
-        ${yandexStatus?.enabled ? yandexSourceCard(yandexStatus) : ""}
-        ${data.items.length ? `<section class="playlist-grid">${data.items.map(playlistCard).join("")}</section>` : `
+        ${data.items.length ? `
+          <div class="collection-summary">
+            <p><strong>${data.items.length}</strong> плейлистов</p>
+            <p class="muted">Зелёный — готово · жёлтый — проверить · красный — отсутствует</p>
+          </div>
+          <section class="grid playlist-grid">${data.items.map(playlistCard).join("")}</section>
+        ` : `
           <section class="empty-state">
             <h2>Плейлистов пока нет</h2>
-            <p>${spotifySource?.connected ? "Импортируйте выше свои плейлисты Spotify — здесь появится прогресс сопоставления." : "Подключите Spotify, затем импортируйте свои плейлисты."}</p>
+            <p>${spotifySource?.connected ? "Откройте импорт ниже и добавьте свои плейлисты Spotify — здесь появится прогресс сопоставления." : "Откройте импорт ниже, подключите Spotify или загрузите список треков."}</p>
           </section>
         `}
+        <details class="import-tools" id="import-tools">
+          <summary>
+            <span><strong>Импорт и источники</strong><small>Spotify, CSV/M3U/TXT, Qobuz и Яндекс Музыка</small></span>
+            <span aria-hidden="true">＋</span>
+          </summary>
+          <section class="import-stack" aria-label="Импорт и источники">
+            ${playlistConverterCard()}
+            ${playlistUrlImportCard(spotifySource)}
+            <div class="provider-strip">
+              ${qobuzSourceCard(qobuzStatus)}
+              ${yandexStatus?.enabled ? yandexSourceCard(yandexStatus) : ""}
+            </div>
+          </section>
+        </details>
       </main>
     `);
     consumeSpotifyCallbackNotice();
@@ -2080,6 +2179,13 @@ app.addEventListener("click", (event) => {
   if (action === "resolve") resolveCandidate(button);
   if (action === "player-revoke") revokePlayerCredential(button);
   if (action === "player-revoke-all") revokeAllPlayerCredentials(button);
+  if (action === "toggle-import") {
+    const panel = document.querySelector("#import-tools");
+    if (panel) {
+      panel.open = !panel.open;
+      if (panel.open) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
   if (action === "copy-player-value") {
     const value = button.dataset.copy === "server" ? state.playerSecret?.server_url : state.playerSecret?.api_key;
     if (value) navigator.clipboard.writeText(value).then(() => showToast("Скопировано")).catch(() => showToast("Не удалось скопировать"));
@@ -2106,7 +2212,7 @@ async function start() {
       state.authenticated = false;
       state.currentUser = null;
       state.csrfToken = null;
-      renderLogin(exception.message);
+      renderLogin(exception.status === 401 ? "" : exception.message);
     }
   }
   if ("serviceWorker" in navigator) {
