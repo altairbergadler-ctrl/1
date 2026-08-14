@@ -10,18 +10,19 @@
 
 - Работать только на сервере через `ssh openclaw-vps`; production-ссылка:
   `/opt/audiofeel/app`.
-- До публикации Audiofeel 1.0 production SHA был
-  `cd403a2f308e86abcdc9d7441a0e9644d42892db`. Текущий deployed SHA всегда
-  получать из `/api/health` и сверять с immutable release directory.
-- GitHub tip `codex/acquisition-queue-push` на момент pre-change audit:
-  `5ef3555eda223b5482311017c3d07324f090de44`. Он на три commit опережает
-  production: один небольшой code/comment change и два docs-only commit.
+- Первый production deploy Audiofeel 1.0 выполнен из
+  `1844879c871152d609c6989b6e08951f0e891e9a`; `v1.0.0` указывает на этот
+  commit. После него подготовлен PWA client-refresh hotfix; текущий deployed
+  SHA всегда получать из `/api/health` и сверять с immutable release directory
+  и GitHub branch.
+- GitHub release branch: `codex/audiofeel-redesign-v1`.
 - Redesign ведётся только на сервере в
   `/opt/audiofeel/worktrees/audiofeel-redesign-v1-20260814`, ветка
-  `codex/audiofeel-redesign-v1`, base = `5ef3555`. Публиковать только
-  immutable release commit и доказывать совпадение GitHub/deployed SHA.
+  `codex/audiofeel-redesign-v1`, base = `5ef3555`. Любой hotfix публиковать
+  только как новый immutable release commit и доказывать совпадение
+  GitHub/deployed SHA.
 - Версия релиза: UI `1.0`, canonical API version `1.0.0`; release tag
-  `v1.0.0` создаётся только после успешного production gate.
+  `v1.0.0` опубликован на `1844879c871152d609c6989b6e08951f0e891e9a`.
 - Alembic: `0012_web_push_subscriptions (head)`.
 - backend, frontend, PostgreSQL, Redis, Qobuz sidecar и Yandex signer healthy;
   worker/beat/egress running; Celery отвечает `pong`.
@@ -41,9 +42,11 @@
 - Визуально проверены безопасные fixture-render без production credentials:
   desktop 1440×1100, tablet 900×1100, mobile 390×844 и login 1200×800.
   Плейлисты находятся в первом экране, импорт сохранён в раскрывающемся блоке.
-- Pre-publication live health возвращал старую схему без `app_version`.
-  Production gate Audiofeel 1.0 обязан подтвердить `app_version=1.0.0`,
-  новый `release_sha`, cache `audiofeel-v19` и неизменность paused jobs.
+- Production gate Audiofeel 1.0 подтвердил `app_version=1.0.0`, Alembic
+  `0012 (head)`, все сервисы, Celery, Drive, CSS/font MIME и неизменность
+  paused jobs. Live PWA acceptance: `15 passed`.
+- Client-refresh hotfix переводит cache на `audiofeel-v20`, версионирует
+  stylesheet/app bundle и один раз перезагружает окна, оставшиеся на старом SPA.
 - Проверенные резервные копии:
   `/var/backups/audiofeel/pre-acquisition-flow-20260812T233056Z.dump` и
   `/var/backups/audiofeel/pre-qobuz-pause-20260812T203423Z.dump`.
@@ -123,7 +126,7 @@ backup и безопасно приостановленные jobs. Полную
   session/CSRF tokens не сохраняются в Web Storage.
 - Audiofeel 1.0 editorial UI с реальными playlist/status counts,
   self-hosted Inter/Literata, desktop/tablet/mobile navigation и PWA cache
-  `audiofeel-v19`; canonical backend version = `1.0.0`.
+  `audiofeel-v20`; canonical backend version = `1.0.0`.
 - `APP_AUTH_TOKEN` изолирован в `/#/recovery` и не принимается обычным API.
 - Приватный внешний доступ через Tailscale Serve HTTPS. Funnel не включён.
 - Provider Health & Credential Rotation: раздельные account/API/sidecar/worker

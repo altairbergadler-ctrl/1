@@ -1,10 +1,10 @@
-const CACHE_NAME = "audiofeel-v19";
+const CACHE_NAME = "audiofeel-v20";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css",
-  "/redesign.css",
-  "/app.js",
+  "/styles.css?v=audiofeel-v20",
+  "/redesign.css?v=audiofeel-v20",
+  "/app.js?v=audiofeel-v20",
   "/manifest.webmanifest",
   "/icon.svg",
   "/fonts/inter-cyrillic.woff2",
@@ -19,12 +19,24 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    const replacesPreviousShell = keys.some(
+      (key) => key !== CACHE_NAME
+        && (key.startsWith("audiofeel-") || key.startsWith("lossless-archive-")),
+    );
+    await Promise.all(
       keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
-    )),
-  );
-  self.clients.claim();
+    );
+    await self.clients.claim();
+    if (replacesPreviousShell) {
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      await Promise.all(windowClients.map((client) => client.navigate(client.url)));
+    }
+  })());
 });
 
 self.addEventListener("fetch", (event) => {

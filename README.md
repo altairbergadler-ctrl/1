@@ -59,7 +59,9 @@ Inter и Literata self-hosted в `frontend/fonts/`; runtime-запросов к 
 Fonts нет. `frontend/redesign.css` загружается после базового stylesheet и
 является основным визуальным слоем, не дублируя API или backend. Canonical
 версия хранится в `backend/app/version.py`, UI показывает короткую `1.0`.
-PWA cache `audiofeel-v19` включает новый stylesheet и локальные fonts.
+PWA cache `audiofeel-v20` включает версионированные stylesheet/app bundle и
+локальные fonts. При замене прежнего shell Service Worker один раз
+перезагружает открытые окна, чтобы старый интерфейс не оставался на экране.
 
 Решения, responsive contract и ограничения безопасности:
 [`docs/audiofeel-v1-design.md`](docs/audiofeel-v1-design.md).

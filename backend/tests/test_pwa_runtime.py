@@ -42,9 +42,11 @@ def test_service_worker_refreshes_app_shell_before_using_cached_copy():
         service_worker = response.read().decode("utf-8")
 
     assert "no-cache" in cache_control
-    assert 'const CACHE_NAME = "audiofeel-v19";' in service_worker
+    assert 'const CACHE_NAME = "audiofeel-v20";' in service_worker
     assert "fetch(request).then" in service_worker
     assert ".catch(() => caches.match(request))" in service_worker
+    assert "replacesPreviousShell" in service_worker
+    assert "client.navigate(client.url)" in service_worker
 
 
 def test_google_drive_guide_maps_current_google_console_fields():
@@ -250,13 +252,18 @@ def test_audiofeel_v1_shell_is_local_and_offline_ready():
     styles = (root / "redesign.css").read_text(encoding="utf-8")
     service_worker = (root / "service-worker.js").read_text(encoding="utf-8")
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+    nginx = (root / "nginx.conf").read_text(encoding="utf-8")
 
-    assert '<link rel="stylesheet" href="/redesign.css">' in index
+    assert '<link rel="stylesheet" href="/styles.css?v=audiofeel-v20">' in index
+    assert '<link rel="stylesheet" href="/redesign.css?v=audiofeel-v20">' in index
+    assert '<script type="module" src="/app.js?v=audiofeel-v20"></script>' in index
     assert 'const APP_VERSION = "1.0";' in app_script
     assert 'class="app app-shell"' in app_script
     assert "fonts.googleapis.com" not in index
     assert 'url("/fonts/inter-cyrillic.woff2")' in styles
-    assert '"/redesign.css"' in service_worker
+    assert '"/redesign.css?v=audiofeel-v20"' in service_worker
     assert '"/fonts/literata-latin.woff2"' in service_worker
+    assert 'location = /index.html' in nginx
+    assert 'Cache-Control "no-cache, no-store, must-revalidate"' in nginx
     assert "COPY index.html app.js styles.css redesign.css" in dockerfile
     assert "COPY fonts /usr/share/nginx/html/fonts" in dockerfile

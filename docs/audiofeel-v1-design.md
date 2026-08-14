@@ -25,8 +25,11 @@ Canonical release version — `1.0.0`; интерфейс показывает �
   сохраняют прежние действия.
 - Existing review, providers, storage, users, players, notifications, imports
   и acquisition controls только restyled; их API semantics не меняются.
-- `frontend/service-worker.js` использует cache `audiofeel-v19` и включает
-  новый stylesheet и четыре font subsets.
+- `frontend/service-worker.js` использует cache `audiofeel-v20`, включает
+  версионированные stylesheet/app bundle и четыре font subsets.
+- При активации поверх `lossless-archive-*` или прежнего `audiofeel-*` cache
+  worker удаляет старый shell, перехватывает clients и один раз перезагружает
+  открытые окна. Это не позволяет старой SPA оставаться после deploy.
 
 ## Design tokens
 
