@@ -249,6 +249,7 @@ def test_audiofeel_v1_shell_is_local_and_offline_ready():
     app_script = (root / "app.js").read_text(encoding="utf-8")
     styles = (root / "redesign.css").read_text(encoding="utf-8")
     service_worker = (root / "service-worker.js").read_text(encoding="utf-8")
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
 
     assert '<link rel="stylesheet" href="/redesign.css">' in index
     assert 'const APP_VERSION = "1.0";' in app_script
@@ -257,3 +258,5 @@ def test_audiofeel_v1_shell_is_local_and_offline_ready():
     assert 'url("/fonts/inter-cyrillic.woff2")' in styles
     assert '"/redesign.css"' in service_worker
     assert '"/fonts/literata-latin.woff2"' in service_worker
+    assert "COPY index.html app.js styles.css redesign.css" in dockerfile
+    assert "COPY fonts /usr/share/nginx/html/fonts" in dockerfile
